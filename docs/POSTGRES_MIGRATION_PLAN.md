@@ -108,7 +108,7 @@ instead of leaking it. Full suite green on the merged head: 89 passed.
 
 ---
 
-### Phase 2: PostgreSQL Schema, DDL & Relational Constraints (PR 2)
+### Phase 2: PostgreSQL Schema, DDL & Relational Constraints — COMPLETE (PR #17, merged 2026-10-01 as `28792e34`)
 
 **Objective:** Define production PostgreSQL DDL with declarative foreign keys and cascade rules to permanently resolve Issue H1 (orphan rows).
 
@@ -211,7 +211,7 @@ instead of leaking it. Full suite green on the merged head: 89 passed.
 
 ---
 
-### Phase 3: Route & Engine Query Standardization (PR 3)
+### Phase 3: Route & Engine Query Standardization — COMPLETE (PR #30, merged 2026-10-02 as `ac2ca35d`)
 
 **Objective:** Audit and adapt all SQL statements across route modules and scheduler algorithms to be fully compatible with PostgreSQL.
 
@@ -243,7 +243,7 @@ instead of leaking it. Full suite green on the merged head: 89 passed.
 
 ---
 
-### Phase 4: Scheduler Concurrency, Advisory Locks & Debounce (PR 4)
+### Phase 4: Scheduler Concurrency, Advisory Locks & Debounce — IN PROGRESS (this PR)
 
 **Objective:** Solve the core scheduling bottleneck (C1, C3) using PostgreSQL transaction advisory locks and asynchronous coalescing.
 
@@ -282,7 +282,7 @@ instead of leaking it. Full suite green on the merged head: 89 passed.
 
 ---
 
-### Phase 5: Container Orchestration, Deployment & CI (PR 5)
+### Phase 5: Container Orchestration, Deployment & CI — COMPLETE (PR #31, merged 2026-10-03 as `5d0931fe`)
 
 **Objective:** Integrate PostgreSQL into the production container stack and CI test runners.
 
