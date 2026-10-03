@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from flask import Flask, session
+from flask import Flask, g, session
 
 from shiftwise.auth import login_required
 from shiftwise.config import Config
@@ -18,6 +18,7 @@ from shiftwise.notify import notify
 from shiftwise.presentation import format_clock
 from shiftwise.routes import register_blueprints
 from shiftwise.scheduler.coverage import apply_sick, coverage_plan
+from shiftwise.scheduler.debounce import init_app as init_scheduler
 from shiftwise.scheduler.engine import run_scheduler
 from shiftwise.security import init_app as init_csrf
 
@@ -50,6 +51,7 @@ def create_app(config_class=Config):
         flask_app.config["SESSION_COOKIE_SECURE"] = True
 
     init_csrf(flask_app)
+    init_scheduler(flask_app)
     register_blueprints(flask_app)
 
     flask_app.jinja_env.filters["clock_time"] = format_clock
@@ -57,14 +59,17 @@ def create_app(config_class=Config):
     @flask_app.context_processor
     def inject_time_format():
         time_format = "24h"
-        if session.get("uid"):
+        user = getattr(g, "current_user", None)
+        if user is None and session.get("uid"):
             conn = db()
-            user = conn.execute(
-                "SELECT time_format FROM users WHERE id=?", (session["uid"],)
-            ).fetchone()
-            conn.close()
-            if user and user["time_format"] in ("12h", "24h"):
-                time_format = user["time_format"]
+            try:
+                user = conn.execute(
+                    "SELECT time_format FROM users WHERE id=?", (session["uid"],)
+                ).fetchone()
+            finally:
+                conn.close()
+        if user and user["time_format"] in ("12h", "24h"):
+            time_format = user["time_format"]
         return {"time_format": time_format}
 
     return flask_app

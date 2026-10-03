@@ -6,7 +6,10 @@ import re
 import sqlite3
 import sys
 import threading
+import zlib
+from contextlib import nullcontext
 from datetime import date, datetime, time, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 from werkzeug.security import generate_password_hash
@@ -169,6 +172,11 @@ CREATE TABLE IF NOT EXISTS login_attempts (
     failures INTEGER NOT NULL DEFAULT 0,
     locked_until TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS scheduler_rebuilds (
+    week_start DATE PRIMARY KEY,
+    due_at TIMESTAMPTZ NOT NULL,
+    generation BIGINT NOT NULL DEFAULT 1
+);
 """
 
 
@@ -292,6 +300,7 @@ def database_engine():
     return _database_engine()
 
 
+@lru_cache(maxsize=1024)
 def _qmark_to_psycopg(query):
     """Translate qmark parameters to psycopg `%s` placeholders.
 
@@ -532,6 +541,7 @@ def _postgres_pool_for(database_url):
             _postgres_pool = None
             _postgres_pool_url = None
         if _postgres_pool is None:
+            from psycopg.conninfo import conninfo_to_dict
             from psycopg_pool import ConnectionPool
 
             pool = ConnectionPool(
@@ -546,7 +556,10 @@ def _postgres_pool_for(database_url):
                 # that failure mode. Scheduler compute is CPU-bound in
                 # Python, so a 30s statement budget and 5s lock-wait budget
                 # are generous backstops, not tight limits.
-                kwargs={"options": "-c statement_timeout=30s -c lock_timeout=5s"},
+                kwargs={
+                    "options": conninfo_to_dict(database_url).get("options", "")
+                    + " -c statement_timeout=30s -c lock_timeout=5s"
+                },
             )
             try:
                 pool.open(wait=True)
@@ -593,18 +606,77 @@ def execute_sql(conn, query, params=()):
     return conn.execute(query, params)
 
 
+def read_queries(conn, queries):
+    """Batch independent SELECTs into one PostgreSQL pipeline round trip."""
+    context = conn.pipeline() if database_engine() == "postgres" else nullcontext()
+    cursors = []
+    try:
+        with context:
+            for query, params in queries:
+                cursors.append(conn.execute(query, params))
+        return [cursor.fetchall() for cursor in cursors]
+    finally:
+        for cursor in cursors:
+            cursor.close()
+
+
 def begin_write(conn):
     """Open a write transaction on the given connection.
 
     SQLite takes the write lock up front with BEGIN IMMEDIATE so a
     concurrent writer fails fast instead of deadlocking mid-run; on
     PostgreSQL the driver opens the transaction implicitly on the first
-    statement and writers serialize via MVCC instead. (Week-scoped
-    advisory locks replace this coarse serialization in Phase 4.)
+    statement. PostgreSQL staffing writers use row locks, and scheduler
+    runs additionally take a week-scoped transaction advisory lock.
     """
     if _database_engine() == "sqlite":
         conn.execute("BEGIN IMMEDIATE")
     # On PostgreSQL there is nothing to do: the transaction is already open.
+
+
+def try_scheduler_lock(conn, week_start):
+    """Acquire a transaction lock for this week; False means another run owns it."""
+    if database_engine() == "sqlite":
+        begin_write(conn)
+        return True
+    key = zlib.crc32(str(week_start).encode("utf-8"))
+    if key >= 2**31:
+        key -= 2**32
+    return conn.execute("SELECT pg_try_advisory_xact_lock(1398230099, ?)", (key,)).fetchone()[0]
+
+
+def lock_shifts(conn, shift_ids):
+    """Lock shift rows in ID order before reading or changing their staffing.
+
+    PostgreSQL capacity checks must run as a separate statement after this
+    lock: a count in the locking SELECT can use a snapshot from before a wait.
+    SQLite takes begin_write when the caller has not opened a transaction.
+    """
+    if database_engine() == "sqlite" and not conn.in_transaction:
+        begin_write(conn)
+    ids = sorted({sid for sid in shift_ids if sid is not None})
+    if database_engine() == "postgres" and ids:
+        placeholders = ",".join("?" for _ in ids)
+        conn.execute(
+            f"SELECT id FROM shifts WHERE id IN ({placeholders}) ORDER BY id FOR UPDATE", ids
+        ).fetchall()
+
+
+def lock_users(conn, user_ids, *, skip_locked=False):
+    """Protect employee hours checks after taking the affected shift locks."""
+    ids = sorted({uid for uid in user_ids if uid is not None})
+    if database_engine() == "postgres" and ids:
+        placeholders = ",".join("?" for _ in ids)
+        suffix = " SKIP LOCKED" if skip_locked else ""
+        return {
+            row[0]
+            for row in conn.execute(
+                f"SELECT id FROM users WHERE id IN ({placeholders}) ORDER BY id "
+                "FOR NO KEY UPDATE" + suffix,
+                ids,
+            )
+        }
+    return set(ids)
 
 
 def _unique_violation_errors():

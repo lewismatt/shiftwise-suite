@@ -13,10 +13,10 @@ from flask import (
 )
 
 from shiftwise.auth import login_required
-from shiftwise.db import db, monday_of
+from shiftwise.db import begin_write, db, lock_shifts, lock_users, monday_of
 from shiftwise.domain.rules import priority_key
 from shiftwise.notify import notify
-from shiftwise.scheduler.engine import run_scheduler
+from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
 
 conflicts_bp = Blueprint("conflicts", __name__)
 
@@ -33,22 +33,29 @@ def conflicts():
         week = monday_of(date.today()).isoformat()
     conn = db()
     shifts = conn.execute("SELECT * FROM shifts WHERE week_start=? ORDER BY id", (week,)).fetchall()
+    picks_by_shift = defaultdict(list)
+    for row in conn.execute(
+        "SELECT p.shift_id, p.user_id, p.rank, u.name, u.employment_type, u.hired_on, "
+        "u.weekly_hours, u.station FROM picks p JOIN users u ON u.id=p.user_id "
+        "JOIN shifts s ON s.id=p.shift_id WHERE s.week_start=? AND u.station=s.area "
+        "ORDER BY p.rank, p.id",
+        (week,),
+    ):
+        picks_by_shift[row["shift_id"]].append(row)
+    staff_by_shift = defaultdict(list)
+    for row in conn.execute(
+        "SELECT a.shift_id, u.name, u.id, a.status FROM assignments a "
+        "JOIN users u ON u.id=a.user_id JOIN shifts s ON s.id=a.shift_id "
+        "WHERE s.week_start=? AND a.status NOT IN ('sick','swap_requested') ORDER BY a.id",
+        (week,),
+    ):
+        staff_by_shift[row["shift_id"]].append(row)
     conflict_list = []
     for s in shifts:
-        claimants = conn.execute(
-            "SELECT p.user_id, p.rank, u.name, u.employment_type, u.hired_on, "
-            "u.weekly_hours, u.station FROM picks p JOIN users u ON u.id=p.user_id "
-            "WHERE p.shift_id=? AND u.station=? ORDER BY p.rank",
-            (s["id"], s["area"]),
-        ).fetchall()
+        claimants = picks_by_shift[s["id"]]
         if not claimants:
             continue
-        assigned_rows = conn.execute(
-            "SELECT u.name, u.id, a.status FROM assignments a "
-            "JOIN users u ON u.id=a.user_id WHERE a.shift_id=? "
-            "AND a.status NOT IN ('sick','swap_requested')",
-            (s["id"],),
-        ).fetchall()
+        assigned_rows = staff_by_shift[s["id"]]
         assigned_ids = {r["id"] for r in assigned_rows}
         contested = [c for c in claimants if c["user_id"] not in assigned_ids]
         if len(assigned_rows) >= s["slots"] and not contested:
@@ -115,6 +122,8 @@ def conflicts():
 @login_required(role="manager")
 def unassign(shift_id, user_id):
     conn = db()
+    begin_write(conn)
+    lock_shifts(conn, [shift_id])
     shift = conn.execute("SELECT week_start FROM shifts WHERE id=?", (shift_id,)).fetchone()
     deleted = conn.execute(
         "DELETE FROM assignments WHERE shift_id=? AND user_id=?", (shift_id, user_id)
@@ -148,7 +157,10 @@ def unassign(shift_id, user_id):
 def manager_assign(shift_id, user_id):
     """MANAGER OVERRIDE: placing any employee onto shifts in their house."""
     conn = db()
+    begin_write(conn)
+    lock_shifts(conn, [shift_id])
     shift = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
+    lock_users(conn, [user_id])
     user = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     if not shift or not user or user["role"] != "employee":
         conn.close()
@@ -170,7 +182,9 @@ def manager_assign(shift_id, user_id):
     if (
         staffed >= shift["slots"]
         and not conn.execute(
-            "SELECT 1 FROM assignments WHERE shift_id=? AND user_id=?", (shift_id, user_id)
+            "SELECT 1 FROM assignments WHERE shift_id=? AND user_id=? "
+            "AND status NOT IN ('sick','swap_requested')",
+            (shift_id, user_id),
         ).fetchone()
     ):
         conn.close()

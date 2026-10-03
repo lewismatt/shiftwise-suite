@@ -9,6 +9,21 @@ PR**, branched from current `master`.
 
 ## How to use this backlog
 
+### Phase 4 implementation (2026-10-03, awaiting review)
+
+C1/C3 are addressed on PostgreSQL by week advisory locks and a durable 500 ms
+rebuild queue; dashboard reads no longer acknowledge notifications. C2 is
+addressed by locking shifts before counting active staffing, including swap
+responses and reactivation of absent assignments. Related cascading deletions
+follow the same shift lock order to avoid deadlocks with those writers.
+
+Automatic vacation coverage now honors weekly hours and days-off limits.
+Coverage on different shifts locks the candidate employee before checking
+hours (H2). Explicit manager overrides retain their existing authority and
+remain visible in liveweek reports. SQLite keeps synchronous rebuilds and
+`begin_write`; these changes do not establish PostgreSQL performance guarantees
+for SQLite. Mark C1–C3 FIXED with the implementation PR number after merge.
+
 1. Pick the highest-severity unfixed item.
 2. Read the linked liveweek issue files in `tools/liveweek-artifacts/` for
    full evidence (tracebacks, event logs, actor timelines).
@@ -388,9 +403,9 @@ For full implementation details, task checklists, and forward engineering handof
 
 | ID | Sev | Category | Status |
 |---|---|---|---|
-| C1 | CRITICAL | `database is locked` → 500 | OPEN |
-| C2 | CRITICAL | Capacity violation (over-staffing) | OPEN |
-| C3 | CRITICAL | Pick storm 5xx | OPEN (subset of C1) |
+| C1 | CRITICAL | `database is locked` → 500 | PHASE 4 REVIEW (PostgreSQL) |
+| C2 | CRITICAL | Capacity violation (over-staffing) | PHASE 4 REVIEW |
+| C3 | CRITICAL | Pick storm 5xx | PHASE 4 REVIEW (PostgreSQL) |
 | H1 | HIGH | Orphan rows after shift delete | OPEN |
 | H2 | HIGH | Hours cap violated | OPEN |
 | H3 | HIGH | Days-off rule violated | OPEN |

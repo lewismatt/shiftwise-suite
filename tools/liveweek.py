@@ -28,7 +28,7 @@ them. Everything is recorded as agent-ready artifacts:
 Usage:
     .venv/bin/python tools/liveweek.py [--duration 120] [--seed N]
         [--out DIR] [--strict] [--no-screenshots]
-        [--database-url postgresql://user:pass@host:5432/db]
+        [--database-url postgresql://user:pass@host:5432/db] [--workers 4]
 
 Exit codes: 0 = harness completed (findings are the product, not failures);
 1 = harness itself broke; 2 = --strict and CRITICAL/HIGH findings present.
@@ -39,10 +39,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import random
 import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -171,8 +173,8 @@ HOTSPOTS = {  # category -> suspected code locations for fixing agents
         "kept even when vacation got approved afterwards)",
     ],
     "hours_cap": [
-        "shiftwise/scheduler/engine.py:run_scheduler (over-cap backfill "
-        "allowed for vacation-gap slots)",
+        "shiftwise/scheduler/coverage.py:coverage_plan (employee lock and hours guard)",
+        "shiftwise/routes/conflicts.py:manager_assign (explicit override)",
     ],
     "days_off": [
         "shiftwise/scheduler/engine.py:run_scheduler (MIN_DAYS_OFF guard)",
@@ -290,6 +292,40 @@ class Response:
         return html_unescape(m.group(1)) if m else None
 
 
+class _MeasuredRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Record each HTTP hop while retaining urllib's redirect semantics."""
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        # Consume the redirect body before timing it; urllib subsequently
+        # reads the exhausted stream and closes it before following Location.
+        fp.read()
+        owner = self.owner
+        owner.rec.event(
+            actor=owner.actor,
+            kind="http",
+            method=req.get_method(),
+            path=urllib.parse.urlsplit(req.full_url).path,
+            status=code,
+            ms=round((time.monotonic() - owner._hop_start) * 1000, 1),
+            phase=owner.phase,
+            final_url=req.full_url,
+        )
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            self.owner._hop_start = time.monotonic()
+            self.owner._hop_method = redirected.get_method()
+            self.owner._hop_path = urllib.parse.urlsplit(redirected.full_url).path
+        return redirected
+
+
 class WSession:
     """One signed-in browser tab: cookie jar + CSRF token + event logging."""
 
@@ -299,7 +335,9 @@ class WSession:
         self.actor = actor
         self.phase = phase
         self.jar = CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.jar), _MeasuredRedirectHandler(self)
+        )
         self.csrf = None
 
     def request(self, method, path, data=None, timeout=45) -> Response:
@@ -313,6 +351,8 @@ class WSession:
                 hdrs["X-CSRF-Token"] = self.csrf
         req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
         t0 = time.monotonic()
+        self._hop_start = t0
+        self._hop_method, self._hop_path = method, path
         status, html, final_url, err = 0, "", url, None
         try:
             with self.opener.open(req, timeout=timeout) as resp:
@@ -329,16 +369,17 @@ class WSession:
         except Exception as e:  # connection-level failure
             err = f"{type(e).__name__}: {e}"
         ms = (time.monotonic() - t0) * 1000.0
+        hop_ms = (time.monotonic() - self._hop_start) * 1000.0
         m = CSRF_RE.search(html)
         if m:
             self.csrf = m.group(1)
         rec_event = {
             "actor": self.actor,
             "kind": "http",
-            "method": method,
-            "path": path,
+            "method": self._hop_method,
+            "path": self._hop_path,
             "status": status,
-            "ms": round(ms, 1),
+            "ms": round(hop_ms, 1),
             "phase": self.phase,
             "final_url": final_url,
         }
@@ -353,6 +394,16 @@ class WSession:
                 phase=self.phase,
             )
         self.rec.event(**rec_event)
+        self.rec.event(
+            actor=self.actor,
+            kind="workflow",
+            method=method,
+            path=path,
+            status=status,
+            ms=round(ms, 1),
+            phase=self.phase,
+            final_url=final_url,
+        )
         if status >= 500:
             self.rec.issue(
                 "CRITICAL",
@@ -536,10 +587,12 @@ class World:
         )
 
     def pending_requests(self):
+        """Pending requests the manager is authorized to review."""
         return self.q(
             "SELECT id, user_id, kind, shift_id, target_shift_id, "
             "target_user_id, day, week_start, vacation_start, vacation_end "
-            "FROM requests WHERE status='approved'"
+            "FROM requests WHERE status='approved' "
+            "AND NOT (kind='swap' AND target_user_id IS NOT NULL)"
         )
 
     def targeted_invites_for(self, uid_: int):
@@ -788,6 +841,7 @@ def run_audit(world: World, rec: Recorder, phase: str, final: bool = False):
         week = min((s["week_start"] for s in shifts.values()), default=None)
         if week:
             hours = defaultdict(float)
+            automatic_hours = defaultdict(float)
             days = defaultdict(set)
             for r in con.execute(
                 "SELECT a.user_id, s.id, s.day, s.start_time, s.end_time, "
@@ -800,13 +854,25 @@ def run_audit(world: World, rec: Recorder, phase: str, final: bool = False):
                 eh, em = map(int, r["end_time"].split(":"))
                 h = (eh * 60 + em - sh * 60 - sm) / 60.0
                 hours[r["user_id"]] += h
+                if r["status"] != "manager_fixed":
+                    automatic_hours[r["user_id"]] += h
                 days[r["user_id"]].add(r["day"])
             for uid_, h in hours.items():
                 u = users.get(uid_)
                 if not u:
                     continue
                 cap = u["weekly_hours"] or 40
-                if h > cap + 4:
+                if h > cap + 0.01 and automatic_hours[uid_] <= cap and h > automatic_hours[uid_]:
+                    findings.append(
+                        (
+                            "MEDIUM",
+                            "hours_cap",
+                            f"hours:{uid_}",
+                            f"user {u['username']} scheduled {h:.1f}h > cap {cap}h "
+                            f"including manager overrides; automatic hours {automatic_hours[uid_]:.1f}h",
+                        )
+                    )
+                elif h > cap + 4:
                     findings.append(
                         (
                             "HIGH",
@@ -821,9 +887,7 @@ def run_audit(world: World, rec: Recorder, phase: str, final: bool = False):
                             "MEDIUM",
                             "hours_cap",
                             f"hours:{uid_}",
-                            f"user {u['username']} scheduled {h:.1f}h "
-                            f"> cap {cap}h (may be legal vacation-gap "
-                            f"backfill)",
+                            f"user {u['username']} scheduled {h:.1f}h > cap {cap}h",
                         )
                     )
             for uid_, ds in days.items():
@@ -1608,8 +1672,27 @@ def drill_double_review(ctx):
     for th in ths:
         th.join()
     row = ctx.world.one("SELECT status FROM requests WHERE id=?", (req["id"],))
-    terminal = row and row["status"] in ("approved_ok", "denied", "superseded")
-    if not terminal:
+    terminal = row is None or row["status"] in ("approved_ok", "denied", "superseded")
+    # Coverage gates can refuse approval without resolving the request. A
+    # pending request is valid only when the responses explain that refusal.
+    blocked = (
+        row is not None
+        and row["status"] == "approved"
+        and len(t_results) == 2
+        and all(
+            result.status < 500
+            and any(
+                text in (result.flash or "")
+                for text in (
+                    "can't be approved until coverage",
+                    "No eligible coverer",
+                    "shift is already full",
+                )
+            )
+            for result in t_results.values()
+        )
+    )
+    if not terminal and not blocked:
         ctx.rec.issue(
             "HIGH",
             "status_invalid",
@@ -1620,7 +1703,7 @@ def drill_double_review(ctx):
             drill="double_review",
             fingerprint_extra="double_review",
         )
-    ctx.rec.coverage_tick("drill:double_review", mismatch=not terminal)
+    ctx.rec.coverage_tick("drill:double_review", mismatch=not terminal and not blocked)
 
 
 def drill_sick_vs_swap(ctx):
@@ -2098,6 +2181,21 @@ SEV_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "INFO": 3}
 
 
 def write_reports(rec, run_dir, args, cfg):
+    events = [json.loads(line) for line in (run_dir / "eventlog.jsonl").read_text().splitlines()]
+    requests = [event for event in events if event.get("kind") == "http"]
+    timings = sorted(event["ms"] for event in requests)
+    workflow_timings = sorted(event["ms"] for event in events if event.get("kind") == "workflow")
+    http_metrics = {
+        "requests": len(requests),
+        "http_5xx": sum(event["status"] >= 500 for event in requests),
+        "p95_ms": timings[math.ceil(len(timings) * 0.95) - 1] if timings else None,
+        "max_ms": max(timings) if timings else None,
+        "workflow_p95_ms": (
+            workflow_timings[math.ceil(len(workflow_timings) * 0.95) - 1]
+            if workflow_timings
+            else None
+        ),
+    }
     issues = sorted(rec.issues, key=lambda i: (SEV_ORDER.get(i["severity"], 9), -i["count"]))
     issue_dir = run_dir / "issues"
     issue_dir.mkdir(exist_ok=True)
@@ -2174,6 +2272,11 @@ DB `{cfg["db"]}` ({cfg["engine"]})
 
 ## Result
 
+HTTP requests: {http_metrics["requests"]} · HTTP 5xx: {http_metrics["http_5xx"]} · \
+P95: {http_metrics["p95_ms"]} ms · workers: {cfg["workers"]}
+
+Whole-action P95 (including redirects): {http_metrics["workflow_p95_ms"]} ms.
+
 | Severity | Count |
 |---|---|
 | CRITICAL | {crit} |
@@ -2222,6 +2325,7 @@ day-offs, switches, roster edits, triage, probes).
     (run_dir / "REPORT.md").write_text(report)
     summary = {
         "config": cfg,
+        "http_metrics": http_metrics,
         "issues": [{k: v for k, v in i.items() if k != "detail"} for i in issues],
         "coverage": dict(rec.coverage),
         "counts": {"CRITICAL": crit, "HIGH": high, "MEDIUM": med, "INFO": info},
@@ -2230,14 +2334,69 @@ day-offs, switches, roster edits, triage, probes).
     return issues
 
 
+class _GunicornServer:
+    """Own the optional production-style worker processes for one test run."""
+
+    def __init__(self, process):
+        self.process = process
+
+    def shutdown(self):
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=5)
+
+
 # ---------------------------------------------------------------- boot
-def boot_server(db_path: Path, run_dir: Path):
+def boot_server(db_path: Path, run_dir: Path, workers=1, threads=2):
     """Import the app with the harness DB, install capture hooks, start a
     real threaded WSGI server on an ephemeral port."""
     os.environ.setdefault("SHIFTWISE_DB_PATH", str(db_path))
     import app as appmod  # noqa: PLC0415  (side-effect import on purpose)
 
     appmod.DB_PATH = db_path
+    if workers > 1:
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(128)
+        port = listener.getsockname()[1]
+        env = os.environ.copy()
+        env["GUNICORN_CMD_ARGS"] = ""
+        env["SHIFTWISE_SECRET_KEY"] = appmod.app.secret_key
+        env["SHIFTWISE_LIVEWEEK_SERVERLOG"] = str(run_dir / "serverlog.jsonl")
+        config_file = run_dir / "gunicorn.conf.py"
+        config_file.write_text("control_socket_disable = True\n")
+        log_file = (run_dir / "gunicorn.log").open("a")
+        try:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "gunicorn",
+                    "tools.liveweek_wsgi:app",
+                    "--config",
+                    str(config_file.resolve()),
+                    "--bind",
+                    f"fd://{listener.fileno()}",
+                    "--workers",
+                    str(workers),
+                    "--threads",
+                    str(threads),
+                    "--graceful-timeout",
+                    "5",
+                ],
+                pass_fds=(listener.fileno(),),
+                cwd=ROOT_DIR,
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+        finally:
+            listener.close()
+            log_file.close()
+        return appmod, _GunicornServer(process), f"http://127.0.0.1:{port}"
     rec = boot_server.rec
 
     def _after(resp):
@@ -2330,6 +2489,15 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--duration", type=int, default=120, help="ambient simulation seconds (default 120)"
     )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="server workers (default 1: threaded Werkzeug; >1: Gunicorn, PostgreSQL only)",
+    )
+    ap.add_argument(
+        "--threads", type=int, default=2, help="Gunicorn threads per worker (default 2)"
+    )
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out", type=str, default=None)
     ap.add_argument(
@@ -2344,6 +2512,12 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--no-screenshots", action="store_true")
     args = ap.parse_args(argv)
+    if not 1 <= args.workers <= 8:
+        ap.error("--workers must be between 1 and 8")
+    if not 1 <= args.threads <= 16:
+        ap.error("--threads must be between 1 and 16")
+    if args.workers > 1 and not args.database_url:
+        ap.error("--workers >1 requires --database-url (an isolated PostgreSQL target)")
     seed = args.seed if args.seed is not None else random.SystemRandom().randrange(2**31)
     rng = random.Random(seed)
 
@@ -2366,7 +2540,7 @@ def main(argv=None) -> int:
         os.environ["DATABASE_URL"] = args.database_url
         print("liveweek: targeting PostgreSQL")
     try:
-        appmod, srv, base = boot_server(db_path, run_dir)
+        appmod, srv, base = boot_server(db_path, run_dir, args.workers, args.threads)
     except Exception:
         print("harness failed to boot server:\n" + traceback.format_exc())
         return 1
@@ -2586,6 +2760,8 @@ def main(argv=None) -> int:
             {
                 "seed": seed,
                 "duration": args.duration,
+                "workers": args.workers,
+                "threads": args.threads if args.workers > 1 else None,
                 "employees": len(usernames),
                 "managers": 2,
                 "base": base,

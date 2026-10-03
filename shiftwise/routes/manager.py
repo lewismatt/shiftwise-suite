@@ -13,12 +13,13 @@ from flask import (
 )
 
 from shiftwise.auth import login_required
-from shiftwise.db import database_engine, db, monday_of
+from shiftwise.db import begin_write, database_engine, db, lock_shifts, lock_users, monday_of
 from shiftwise.domain.constants import DAYS
 from shiftwise.domain.rules import assignment_block_reason
 from shiftwise.notify import notify
 from shiftwise.scheduler.coverage import coverage_plan
-from shiftwise.scheduler.engine import run_scheduler
+from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
+from shiftwise.scheduler.engine import run_scheduler as run_scheduler_now
 
 manager_bp = Blueprint("manager", __name__)
 
@@ -129,6 +130,23 @@ def add_shift():
 @login_required(role="manager")
 def delete_shift(shift_id):
     conn = db()
+    begin_write(conn)
+    pairs = conn.execute(
+        "SELECT shift_id, target_shift_id FROM requests WHERE shift_id=? OR target_shift_id=?",
+        (shift_id, shift_id),
+    ).fetchall()
+    week_ids = [
+        row[0]
+        for row in conn.execute(
+            "SELECT id FROM shifts WHERE week_start="
+            "(SELECT week_start FROM shifts WHERE id=?) ORDER BY id",
+            (shift_id,),
+        )
+    ]
+    # Include the whole week: a new paired request can commit between the
+    # request snapshot above and acquiring these locks. Its FK update on
+    # deletion must follow the same order as a response to that request.
+    lock_shifts(conn, [shift_id, *week_ids, *(sid for pair in pairs for sid in pair)])
     shift = conn.execute("SELECT week_start FROM shifts WHERE id=?", (shift_id,)).fetchone()
     conn.execute(
         "UPDATE requests SET status='superseded' WHERE "
@@ -155,7 +173,7 @@ def delete_shift(shift_id):
 @manager_bp.route("/manager/run", methods=["POST"])
 @login_required(role="manager")
 def run():
-    n = run_scheduler(monday_of(date.today()).isoformat())
+    n = run_scheduler_now(monday_of(date.today()).isoformat())
     flash(f"Scheduler ran over {n} picks — check assignments below.")
     return redirect(url_for("manager"))
 
@@ -399,6 +417,7 @@ _APPROVE_HANDLERS = {
 @login_required(role="manager")
 def approve_request(req_id):
     conn = db()
+    begin_write(conn)
     reason = request.form.get("reason", "").strip()
     if len(reason) > 500:
         conn.close()
@@ -408,6 +427,15 @@ def approve_request(req_id):
         "SELECT * FROM requests WHERE id=? AND NOT (kind='swap' AND target_user_id IS NOT NULL)",
         (req_id,),
     ).fetchone()
+    if not r or r["status"] != "approved":
+        conn.close()
+        flash("Request not found or already handled.")
+        return redirect(url_for("manager.requests"))
+    lock_shifts(conn, [r["shift_id"], r["target_shift_id"]])
+    if r["kind"] == "switch":
+        lock_users(conn, [r["user_id"]])
+    # Re-read after waiting for the shifts: another manager may have resolved it.
+    r = conn.execute("SELECT * FROM requests WHERE id=?", (req_id,)).fetchone()
     if not r or r["status"] != "approved":
         conn.close()
         flash("Request not found or already handled.")
@@ -429,6 +457,7 @@ def approve_request(req_id):
 @login_required(role="manager")
 def deny_request(req_id):
     conn = db()
+    begin_write(conn)
     r = conn.execute(
         "SELECT * FROM requests WHERE id=? AND NOT (kind='swap' AND target_user_id IS NOT NULL)",
         (req_id,),
@@ -443,6 +472,27 @@ def deny_request(req_id):
         flash("Keep the response reason to 500 characters or fewer.")
         return redirect(url_for("requests"))
     reason = reason or "The manager declined this request."
+    lock_shifts(conn, [r["shift_id"], r["target_shift_id"]])
+    r = conn.execute("SELECT * FROM requests WHERE id=?", (req_id,)).fetchone()
+    if not r or r["status"] != "approved":
+        conn.close()
+        flash("Request not found or already handled.")
+        return redirect(url_for("requests"))
+    if r["kind"] == "swap":
+        absent = conn.execute(
+            "SELECT 1 FROM assignments WHERE shift_id=? AND user_id=? AND status='swap_requested'",
+            (r["shift_id"], r["user_id"]),
+        ).fetchone()
+        shift = conn.execute("SELECT slots FROM shifts WHERE id=?", (r["shift_id"],)).fetchone()
+        staffed = conn.execute(
+            "SELECT COUNT(*) FROM assignments WHERE shift_id=? "
+            "AND status NOT IN ('sick','swap_requested')",
+            (r["shift_id"],),
+        ).fetchone()[0]
+        if absent and shift and staffed >= shift["slots"]:
+            conn.close()
+            flash("Can't decline that swap: the shift is already full.")
+            return redirect(url_for("requests"))
     conn.execute("UPDATE requests SET status='denied', reason=? WHERE id=?", (reason, req_id))
     if r["kind"] == "swap":
         conn.execute(

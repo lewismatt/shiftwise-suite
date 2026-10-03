@@ -6,8 +6,11 @@ import smtplib
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import closing
 from datetime import datetime
 from email.message import EmailMessage
+
+from shiftwise.db import database_engine
 
 # Module-level handles for the delivery libraries. Tests patch these names
 # (e.g. `patch("shiftwise.notify._smtplib")`) instead of reaching through the
@@ -18,11 +21,44 @@ _urllib = urllib
 
 def notify(conn, user_id, kind, message, shift_id=None):
     """Insert an in-app notification for a user."""
+    if database_engine() == "postgres":
+        # A deleted employee has no inbox. Lock before inserting so a concurrent
+        # roster deletion either waits or leaves no row to notify.
+        user = conn.execute("SELECT id FROM users WHERE id=? FOR KEY SHARE", (user_id,)).fetchone()
+        if not user:
+            return
     conn.execute(
         "INSERT INTO notifications (user_id, shift_id, kind, message, created_at) "
         "VALUES (?,?,?,?,?)",
         (user_id, shift_id, kind, message, datetime.now().isoformat(timespec="seconds")),
     )
+
+
+def notify_many(conn, notifications):
+    """Batch a scheduler's retained notifications after locking their inboxes."""
+    if not notifications:
+        return
+    recipients = {entry[0] for entry in notifications}
+    if database_engine() == "postgres":
+        ids = sorted(recipients)
+        placeholders = ",".join("?" for _ in ids)
+        recipients = {
+            row[0]
+            for row in conn.execute(
+                f"SELECT id FROM users WHERE id IN ({placeholders}) ORDER BY id FOR KEY SHARE", ids
+            )
+        }
+    now = datetime.now().isoformat(timespec="seconds")
+    with closing(conn.cursor()) as cursor:
+        cursor.executemany(
+            "INSERT INTO notifications (user_id, shift_id, kind, message, created_at) "
+            "VALUES (?,?,?,?,?)",
+            [
+                (uid, sid, kind, message, now)
+                for uid, kind, message, sid in notifications
+                if uid in recipients
+            ],
+        )
 
 
 def send_schedule_link(channel, destination, employee_name, link):

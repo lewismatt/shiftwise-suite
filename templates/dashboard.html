@@ -4,6 +4,12 @@
 <p class="muted" style="margin-bottom:20px">Week of {{ week }}</p>
 
 <h2>Notifications</h2>
+{% if notifs | selectattr('read', 'equalto', false) | list %}
+<form method="post" action="{{ url_for('read_notifications') }}">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <button type="submit">Mark all as read</button>
+</form>
+{% endif %}
 {% for n in notifs %}
   <div class="notif {{ 'unread' if not n.read }} {{ n.kind }}">
     {{ n.message }}

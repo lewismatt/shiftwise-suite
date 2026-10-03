@@ -164,7 +164,7 @@ class ReviewFixes(unittest.TestCase):
             )
         conn.close()
 
-    def test_vacation_coverage_can_suggest_extra_day_for_manager_review(self):
+    def test_vacation_coverage_respects_days_off(self):
         week = (appmod.date.fromisoformat(self.week) + timedelta(days=7)).isoformat()
         conn = appmod.db()
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
@@ -172,7 +172,7 @@ class ReviewFixes(unittest.TestCase):
             "UPDATE users SET station='back' WHERE role='employee' "
             "AND username NOT IN ('alex', 'sam')"
         )
-        conn.execute("UPDATE users SET weekly_hours=40 WHERE id=?", (alex_id,))
+        conn.execute("UPDATE users SET weekly_hours=80 WHERE id=?", (alex_id,))
         shift_ids = []
         for day in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat"):
             shift_ids.append(
@@ -203,13 +203,10 @@ class ReviewFixes(unittest.TestCase):
         )
         conn.commit()
         self.assertIsNone(appmod.coverage_plan(conn, week, shift_ids[5], None))
-        self.assertEqual(
-            appmod.coverage_plan(conn, week, shift_ids[5], None, allow_over_limits=True), alex_id
-        )
         conn.close()
         appmod.run_scheduler(week)
         conn = appmod.db()
-        self.assertTrue(
+        self.assertIsNone(
             conn.execute(
                 "SELECT 1 FROM assignments WHERE user_id=? AND shift_id=?", (alex_id, shift_ids[5])
             ).fetchone()
@@ -217,7 +214,7 @@ class ReviewFixes(unittest.TestCase):
         conn.close()
         self.login("manager")
         review_page = self.client.get("/manager/requests")
-        self.assertIn(b"Review proposed coverage", review_page.data)
+        self.assertIn(b"Coverage needed", review_page.data)
 
     def test_denied_vacation_releases_its_exclusion(self):
         next_week = appmod.monday_of(date.today()) + timedelta(days=7)
@@ -605,8 +602,8 @@ class ReviewFixes(unittest.TestCase):
         self.assertIsNone(remaining_shifts)
         self.assertIsNone(remaining_assignments)
 
-    def test_over_limit_cover_only_fills_vacation_gaps(self):
-        """Only slots a pending vacation holds open may be filled past the caps."""
+    def test_vacation_coverage_respects_hours_caps(self):
+        """Vacation gaps cannot schedule either house beyond employee hours caps."""
         week = appmod.monday_of(date.today()).isoformat()
         conn = appmod.db()
         for table in (
@@ -688,9 +685,9 @@ class ReviewFixes(unittest.TestCase):
             return found
 
         appmod.run_scheduler(week)
-        # the vacation-driven gap may go over alex's 8h cap (16h that week) ...
-        self.assertTrue(assigned_to("alex", "front", "Mon"))
-        # ... but Wednesday's gap is nobody's vacation, so it stays inside the cap
+        # Alex has used his 8h cap; the vacation gap must stay open.
+        self.assertFalse(assigned_to("alex", "front", "Mon"))
+        # Ordinary gaps also stay inside the cap.
         self.assertFalse(assigned_to("bob", "back", "Wed"))
 
         conn = appmod.db()

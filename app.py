@@ -31,7 +31,11 @@ from shiftwise.db import (
     db,
     execute_sql,
     init_db,
+    lock_shifts,
+    lock_users,
     monday_of,
+    read_queries,
+    try_scheduler_lock,
 )
 from shiftwise.domain.constants import DAYS, MIN_DAYS_OFF
 from shiftwise.domain.rules import (
@@ -42,9 +46,10 @@ from shiftwise.domain.rules import (
     valid_email,
     valid_phone,
 )
-from shiftwise.notify import notify, send_schedule_link
+from shiftwise.notify import notify, notify_many, send_schedule_link
 from shiftwise.routes.calendar import calendar_days
 from shiftwise.scheduler.coverage import apply_sick, coverage_plan
+from shiftwise.scheduler.debounce import enqueue_rebuild, process_rebuilds, request_rebuild
 from shiftwise.scheduler.engine import run_scheduler
 
 # Keep compatibility writes here; delivery code depends only on its own module.
@@ -107,9 +112,16 @@ __all__ = [
     "db",
     "database_engine",
     "execute_sql",
+    "read_queries",
     "init_db",
     "monday_of",
     "begin_write",
+    "lock_shifts",
+    "lock_users",
+    "try_scheduler_lock",
+    "enqueue_rebuild",
+    "process_rebuilds",
+    "request_rebuild",
     "UNIQUE_VIOLATION_ERRORS",
     "DB_PATH",  # dynamic: resolved by the _AppModule proxy, see its docstring
     "SCHEMA",
@@ -118,6 +130,7 @@ __all__ = [
     "MIN_DAYS_OFF",
     "login_required",
     "notify",
+    "notify_many",
     "send_schedule_link",
     "run_scheduler",
     "coverage_plan",
