@@ -41,7 +41,11 @@
 - `./tools/run_all.sh --fast` runs the pytest suite only (for the inner development loop) and prints the full-gate reminder.
 - Dev extras (`requirements-dev.txt`: `pytest-timeout`, `pglast`) are required for a fully green suite: without `pglast` the PostgreSQL DDL parser test skips, and `pytest.ini` caps each test at 180 s so a lock wait or dialect error cannot hang a run.
 - `tools/check_entrypoints.py` (run as step `[0]` of `tools/run_all.sh`) asserts the tracked shell entrypoints (`tools/run_all.sh`, `tools/clean_artifacts.sh`, `docker-entrypoint.sh`, `shiftwise-mock/sync.sh`) keep mode `100755` via `git ls-files -s`. It catches the regression class PR #18 shipped: a dropped executable bit silently breaks the documented `./tools/run_all.sh` while every test still passes.
-- `.github/workflows/ci.yml` runs only that guard on pushes to `master` and on pull requests (no pytest, docker, or venv). It is not a required status check — blocking merges needs branch protection, which needs repo admin.
+- `.github/workflows/ci.yml` runs the executable-bit guard plus a `postgres` job (live PostgreSQL 16
+  service; ruff, the Postgres regression test modules, gauntlet, and pinned-seed chaos run) on pushes to `master`
+  and on pull requests. The full pytest suite is NOT in CI: its per-test isolation is SQLite-file-based, so on one
+  shared Postgres database the tests pollute each other (see PR #38 body). It is not a required status check —
+  blocking merges needs branch protection, which needs repo admin.
 
 ## 5. Simulation Harness & Mock Roster Coupling
 - **Dynamic Staffing Expectations:**
