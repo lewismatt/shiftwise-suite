@@ -1,8 +1,12 @@
 name: CI
 
-# One dependency-free check: the tracked shell entrypoints keep their
-# executable bit.  Deliberately tiny -- no python/pytest/docker/venv setup;
-# the test suite runs locally via tools/run_all.sh (AGENTS.md section 4).
+# Two jobs:
+#   verify          -- dependency-free guard: tracked shell entrypoints keep
+#                      their executable bit (./tools/check_entrypoints.py).
+#   pytest-postgres -- the pytest suite against a live PostgreSQL 16 service
+#                      (Phase 5 "CI Pipeline Integration"). Quick scenario
+#                      tools run in the same job; the liveweek concurrency
+#                      gauntlet stays manual (too heavy for CI).
 # This is not a required status check: blocking merges needs branch protection,
 # which needs repo admin.
 
@@ -23,3 +27,39 @@ jobs:
       - uses: actions/checkout@v7
       - name: Tracked entrypoints stay executable
         run: ./tools/check_entrypoints.py
+
+  pytest-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: shiftwise_test
+          POSTGRES_USER: shiftwise
+          POSTGRES_PASSWORD: shiftwise
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shiftwise -d shiftwise_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://shiftwise:shiftwise@localhost:5432/shiftwise_test
+      TEST_DATABASE_URL: postgresql://shiftwise:shiftwise@localhost:5432/shiftwise_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Pytest suite on PostgreSQL
+        run: python -m pytest tests/ -q
+      - name: Conflict gauntlet on PostgreSQL
+        run: python tools/gauntlet.py
+      - name: Chaos simulation (pinned seed) on PostgreSQL
+        run: python tools/scenario_random.py 42
