@@ -123,8 +123,10 @@ def test_requests():
         cap_violations = conn.execute(
             """SELECT u.username, u.weekly_hours, SUM(
                  CASE WHEN s.start_time IS NOT NULL
-                 THEN (CAST(substr(s.end_time,1,2) AS REAL)*60 + CAST(substr(s.end_time,4,2) AS REAL)
-                     - CAST(substr(s.start_time,1,2) AS REAL)*60 - CAST(substr(s.start_time,4,2) AS REAL))/60.0
+                 THEN (CAST(substr(CAST(s.end_time AS TEXT),1,2) AS REAL)*60
+                     + CAST(substr(CAST(s.end_time AS TEXT),4,2) AS REAL)
+                     - CAST(substr(CAST(s.start_time AS TEXT),1,2) AS REAL)*60
+                     - CAST(substr(CAST(s.start_time AS TEXT),4,2) AS REAL))/60.0
                  ELSE 0 END) h
                FROM users u
                LEFT JOIN assignments a ON a.user_id=u.id AND a.status NOT IN ('sick','swap_requested')

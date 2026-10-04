@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import isolate_database
+from test_support import insert_id, isolate_database
 
 import app as appmod
 
@@ -31,11 +31,12 @@ def test_manager_override():
 
         def add_shift(day, slots=1, area="front"):
             conn = appmod.db()
-            sid = conn.execute(
+            sid = insert_id(
+                conn,
                 "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
                 "VALUES (?,?,?,?,?,?)",
                 (WEEK, day, "09:00", "17:00", slots, area),
-            ).lastrowid
+            )
             conn.commit()
             conn.close()
             return sid

@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import isolate_database
+from test_support import insert_id, isolate_database
 
 import app as appmod
 
@@ -22,15 +22,17 @@ def test_conflicts():
         conn = appmod.db()
         conn.execute("DELETE FROM shifts")
         # Mon 1 slot, all 3 employees rank it #1 -> conflict with 3 claimants
-        mon = conn.execute(
+        mon = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Mon", "09:00", "17:00", 1),
-        ).lastrowid
+        )
         # Tue 1 slot, only jordan picks it -> no conflict
-        tue = conn.execute(
+        tue = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Tue", "09:00", "17:00", 1),
-        ).lastrowid
+        )
         for u in ("alex", "sam", "jordan"):
             uid = conn.execute("SELECT id FROM users WHERE username=?", (u,)).fetchone()[0]
             conn.execute("INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,1)", (uid, mon))

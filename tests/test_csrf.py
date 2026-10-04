@@ -12,6 +12,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from test_support import insert_id
+
 import app as appmod
 import mock_seed
 from shiftwise.security import CSRF_FIELD, CSRF_HEADER, CsrfAwareTestClient
@@ -132,12 +134,14 @@ class CsrfTests(unittest.TestCase):
         }
         shift_ids = []
         for start, end in (("01:00", "03:00"), ("03:00", "05:00")):
-            cursor = conn.execute(
-                "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
-                "VALUES (?, 'Mon', ?, ?, 1, 'front')",
-                (week, start, end),
+            shift_ids.append(
+                insert_id(
+                    conn,
+                    "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
+                    "VALUES (?, 'Mon', ?, ?, 1, 'front')",
+                    (week, start, end),
+                )
             )
-            shift_ids.append(cursor.lastrowid)
         conn.executemany(
             "INSERT INTO assignments (shift_id, user_id, status) VALUES (?, ?, 'notified')",
             [(shift_ids[0], users["alex"]), (shift_ids[1], users["sam"])],

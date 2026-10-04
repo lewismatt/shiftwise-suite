@@ -1,5 +1,7 @@
 from datetime import date
 
+from test_support import insert_id
+
 import app as appmod
 
 
@@ -15,12 +17,14 @@ def _setup_swap_pair():
     }
     shift_ids = []
     for start, end in (("01:00", "03:00"), ("03:00", "05:00")):
-        cur = conn.execute(
-            "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
-            "VALUES (?, 'Mon', ?, ?, 1, 'front')",
-            (week, start, end),
+        shift_ids.append(
+            insert_id(
+                conn,
+                "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
+                "VALUES (?, 'Mon', ?, ?, 1, 'front')",
+                (week, start, end),
+            )
         )
-        shift_ids.append(cur.lastrowid)
     conn.executemany(
         "INSERT INTO assignments (shift_id, user_id, status) VALUES (?, ?, 'notified')",
         [(shift_ids[0], users["alex"]), (shift_ids[1], users["sam"])],
@@ -282,12 +286,12 @@ def test_manager_placed_shifts_cannot_be_involved_in_employee_swaps(isolated_db)
     conn = appmod.db()
     # A second, regularly-assigned shift keeps the swap form rendered so the
     # dropdown exclusion below is actually observable rather than vacuous.
-    cur = conn.execute(
+    extra_shift = insert_id(
+        conn,
         "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
         "VALUES (?, 'Tue', '01:00', '03:00', 1, 'front')",
         (week,),
     )
-    extra_shift = cur.lastrowid
     conn.execute(
         "INSERT INTO assignments (shift_id, user_id, status) VALUES (?, ?, 'confirmed')",
         (extra_shift, users["alex"]),

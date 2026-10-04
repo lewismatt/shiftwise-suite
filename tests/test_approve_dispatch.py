@@ -6,7 +6,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import isolate_database
+from test_support import insert_id, isolate_database
 
 import app as appmod
 
@@ -34,19 +34,21 @@ def test_approve_dispatch_vacation_and_swap():
         uid = conn.execute("SELECT id FROM users WHERE role='employee' LIMIT 1").fetchone()[0]
         now = datetime.now().isoformat(timespec="seconds")
         # Vacation over a range with no shifts -> no coverage gaps -> approved.
-        vid = conn.execute(
+        vid = insert_id(
+            conn,
             "INSERT INTO requests (user_id, kind, vacation_start, vacation_end, "
             "status, created_at) VALUES (?, 'vacation', '2030-01-06', '2030-01-12', "
             "'approved', ?)",
             (uid, now),
-        ).lastrowid
+        )
         # Swap with no swap_requested assignment -> no eligible coverer path.
         shift_id = conn.execute("SELECT id FROM shifts LIMIT 1").fetchone()[0]
-        sid = conn.execute(
+        sid = insert_id(
+            conn,
             "INSERT INTO requests (user_id, kind, shift_id, status, created_at) "
             "VALUES (?, 'swap', ?, 'approved', ?)",
             (uid, shift_id, now),
-        ).lastrowid
+        )
         conn.commit()
         conn.close()
 

@@ -10,6 +10,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from test_support import insert_id
+
 import app as appmod
 
 
@@ -136,11 +138,12 @@ class ReviewFixes(unittest.TestCase):
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
         shifts = []
         for day in ("Mon", "Thu"):
-            shift_id = conn.execute(
+            shift_id = insert_id(
+                conn,
                 "INSERT INTO shifts (week_start, day, start_time, end_time, slots) "
                 "VALUES (?,?,?,?,?)",
                 (next_week.isoformat(), day, "09:00", "17:00", 1),
-            ).lastrowid
+            )
             shifts.append(shift_id)
             conn.execute(
                 "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)",
@@ -176,11 +179,12 @@ class ReviewFixes(unittest.TestCase):
         shift_ids = []
         for day in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat"):
             shift_ids.append(
-                conn.execute(
+                insert_id(
+                    conn,
                     "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
                     "VALUES (?,?,?,?,?,?)",
                     (week, day, "09:00", "17:00", 1, "front"),
-                ).lastrowid
+                )
             )
         for shift_id in shift_ids[:5]:
             conn.execute(
@@ -219,10 +223,11 @@ class ReviewFixes(unittest.TestCase):
     def test_denied_vacation_releases_its_exclusion(self):
         next_week = appmod.monday_of(date.today()) + timedelta(days=7)
         conn = appmod.db()
-        shift_id = conn.execute(
+        shift_id = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (next_week.isoformat(), "Mon", "09:00", "17:00", 1),
-        ).lastrowid
+        )
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
         conn.execute(
             "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)", (alex_id, shift_id, 1)
@@ -252,10 +257,11 @@ class ReviewFixes(unittest.TestCase):
     def test_vacation_approval_requires_coverage(self):
         next_week = appmod.monday_of(date.today()) + timedelta(days=7)
         conn = appmod.db()
-        shift_id = conn.execute(
+        shift_id = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (next_week.isoformat(), "Mon", "09:00", "17:00", 99),
-        ).lastrowid
+        )
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
         conn.execute(
             "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)", (alex_id, shift_id, 1)
@@ -285,11 +291,12 @@ class ReviewFixes(unittest.TestCase):
     def test_vacation_approval_succeeds_after_shift_is_backfilled(self):
         next_week = appmod.monday_of(date.today()) + timedelta(days=7)
         conn = appmod.db()
-        shift_id = conn.execute(
+        shift_id = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
             "VALUES (?,?,?,?,?,?)",
             (next_week.isoformat(), "Mon", "09:00", "17:00", 1, "front"),
-        ).lastrowid
+        )
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
         conn.execute(
             "INSERT INTO assignments (shift_id, user_id, status) VALUES (?,?, 'manager_fixed')",
@@ -366,11 +373,12 @@ class ReviewFixes(unittest.TestCase):
         conn.execute("DELETE FROM shifts")
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
         for rank, (start, end) in enumerate((("09:00", "17:00"), ("12:00", "16:00")), 1):
-            shift_id = conn.execute(
+            shift_id = insert_id(
+                conn,
                 "INSERT INTO shifts (week_start, day, start_time, end_time, slots) "
                 "VALUES (?,?,?,?,?)",
                 (self.week, "Mon", start, end, 1),
-            ).lastrowid
+            )
             conn.execute(
                 "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)",
                 (alex_id, shift_id, rank),
@@ -412,10 +420,11 @@ class ReviewFixes(unittest.TestCase):
         conn.execute("DELETE FROM shifts")
         conn.execute("DELETE FROM users WHERE role='employee' AND username!='alex'")
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
-        shift_id = conn.execute(
+        shift_id = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (self.week, "Mon", "09:00", "17:00", 1),
-        ).lastrowid
+        )
         conn.execute(
             "INSERT INTO assignments (shift_id, user_id, status) VALUES (?,?,?)",
             (shift_id, alex_id, "confirmed"),
@@ -477,11 +486,12 @@ class ReviewFixes(unittest.TestCase):
             ("Wed", "09:00", "21:00"),
         ):
             ids.append(
-                conn.execute(
+                insert_id(
+                    conn,
                     "INSERT INTO shifts (week_start, day, start_time, end_time, slots) "
                     "VALUES (?,?,?,?,?)",
                     (self.week, day, start, end, 1),
-                ).lastrowid
+                )
             )
         for shift_id in ids[:2]:
             conn.execute(
@@ -514,10 +524,11 @@ class ReviewFixes(unittest.TestCase):
         conn = appmod.db()
         conn.execute("DELETE FROM shifts")
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
-        shift_id = conn.execute(
+        shift_id = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (self.week, "Mon", "09:00", "17:00", 1),
-        ).lastrowid
+        )
         conn.execute(
             "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)", (alex_id, shift_id, 1)
         )
@@ -534,10 +545,11 @@ class ReviewFixes(unittest.TestCase):
         self.assertFalse(reassigned)
         self.client.post(f"/manager/shift/delete/{shift_id}")
         conn = appmod.db()
-        replacement = conn.execute(
+        replacement = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (self.week, "Mon", "09:00", "17:00", 1),
-        ).lastrowid
+        )
         conn.commit()
         conn.close()
         appmod.run_scheduler(self.week)
@@ -570,10 +582,11 @@ class ReviewFixes(unittest.TestCase):
     def test_delete_shift_rebuilds_target_week(self):
         next_week = (appmod.monday_of(date.today()) + timedelta(days=7)).isoformat()
         conn = appmod.db()
-        shift_id = conn.execute(
+        shift_id = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (next_week, "Mon", "09:00", "17:00", 1),
-        ).lastrowid
+        )
         alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
         conn.execute(
             "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)", (alex_id, shift_id, 1)
@@ -637,11 +650,12 @@ class ReviewFixes(unittest.TestCase):
             )
         shifts = {}
         for area, day in (("front", "Mon"), ("front", "Tue"), ("back", "Tue"), ("back", "Wed")):
-            shifts[(area, day)] = conn.execute(
+            shifts[(area, day)] = insert_id(
+                conn,
                 "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
                 "VALUES (?,?,?,?,?,?)",
                 (week, day, "09:00", "17:00", 1, area),
-            ).lastrowid
+            )
         uid = {r["username"]: r["id"] for r in conn.execute("SELECT id, username FROM users")}
         for (area, day), username in (
             (("front", "Tue"), "alex"),
