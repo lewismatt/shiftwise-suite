@@ -39,11 +39,19 @@
     (`tools/scenario_random.py 42`, pinned seed) completes without error;
   - the live-week concurrency gauntlet (`tools/liveweek.py`) completes without harness error; its findings are recorded as artifacts in `tools/liveweek-artifacts/` (gitignored) for fixing agents — they are reports, not suite failures (`--strict` enforces them in CI). Duration is configurable via `--liveweek-seconds N` or `SHIFTWISE_LIVEWEEK_SECONDS`;
   - `docker compose config` validates.
+- PostgreSQL acceptance: `DATABASE_URL=<redacted> ./tools/run_all.sh` runs the
+  whole gate against PostgreSQL. The backend is detected the same way the app detects it
+  (`SHIFTWISE_DB_ENGINE` first, else inferred from `DATABASE_URL`); in Postgres mode the pytest step runs
+  the Postgres regression modules instead of the full suite (not yet Postgres-safe — issue #39),
+  `TEST_DATABASE_URL` defaults to `DATABASE_URL`, and liveweek gets `--database-url`. Target a fresh
+  database for a reproducible run. Without Postgres indicators, every step runs on isolated SQLite
+  exactly as before.
 - Failure contract: the scenario steps (`gauntlet.py`, `scenario_random.py`) fail the gate on unhandled exceptions
-  or failed assertions; their printed final audits (understaffing, over-cap, cross-house leaks) are informational.
-  `tools/scenario_demo.py` is a human click-through demo, not a gate step — it leaves its database behind for
-  port-5001 inspection by design. `liveweek.py` findings are structured issues instead — reports by default,
-  enforced with `--strict`.
+  or failed assertions — including the gauntlet's no-understaffing check (phase 1) and no-capacity-violation
+  check (final audit); the final audit's printed summaries (sick rows, weekly hours, request log) are
+  informational. `tools/scenario_demo.py` is a human click-through demo, not a gate step — it leaves its database
+  behind for port-5001 inspection by design. `liveweek.py` findings are structured issues instead — reports by
+  default, enforced with `--strict`.
 - `./tools/run_all.sh --fast` runs the pytest suite only (for the inner development loop) and prints the full-gate reminder.
 - Dev extras (`requirements-dev.txt`: `pytest-timeout`, `pglast`) are required for a fully green suite: without `pglast` the PostgreSQL DDL parser test skips, and `pytest.ini` caps each test at 180 s so a lock wait or dialect error cannot hang a run.
 - `tools/check_entrypoints.py` (run as step `[0]` of `tools/run_all.sh`) asserts the tracked shell entrypoints (`tools/run_all.sh`, `tools/clean_artifacts.sh`, `docker-entrypoint.sh`, `shiftwise-mock/sync.sh`) keep mode `100755` via `git ls-files -s`. It catches the regression class PR #18 shipped: a dropped executable bit silently breaks the documented `./tools/run_all.sh` while every test still passes.

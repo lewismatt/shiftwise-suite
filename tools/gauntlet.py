@@ -222,6 +222,10 @@ def run_gauntlet():
         r = client.post("/pick", data=form, follow_redirects=True)
         assert b"Preferences saved" in r.data, u
     print("  all saved; schedule:")
+    # Force the synchronous rebuild explicitly: on SQLite /pick already
+    # rebuilt, but on Postgres the rebuild is debounced and would race
+    # the understaffed assertion below.
+    appmod.run_scheduler(WEEK)
     sched = schedule()
     for d, n, s, names in sched:
         print(f"    {d}: {n}/{s}  [{names}]")
@@ -407,6 +411,10 @@ def run_gauntlet():
     assert j_mine, "jordan holds no shift to unassign"
     tgt = j_mine[0]
     client.post(f"/manager/unassign/{tgt['id']}/{uid('jordan')}", follow_redirects=True)
+    # Force the synchronous rebuild explicitly: on SQLite the unassign route
+    # already rebuilt, but on Postgres the rebuild is debounced and would race
+    # the backfill assertion below.
+    appmod.run_scheduler(WEEK)
     c = appmod.db()
     gone = c.execute(
         "SELECT 1 FROM assignments WHERE shift_id=? AND user_id=?",
@@ -464,6 +472,10 @@ def run_gauntlet():
     form = full_rank_form(day_shift_ids(house_of("riley")), ["Mon", "Tue", "Wed", "Fri", "Sat"])
     r = client.post("/pick", data=form, follow_redirects=True)
     assert b"Preferences saved" in r.data, "riley cap-stress pick rejected"
+    # Force the synchronous rebuild explicitly: on SQLite /pick already
+    # rebuilt, but on Postgres the rebuild is debounced and would race the
+    # hours-cap and notification assertions below (both are scheduler output).
+    appmod.run_scheduler(WEEK)
     hrs = assigned_hours("riley")
     assert hrs <= 16.01, f"riley over hours cap: {hrs:.1f}h > 16h"
     assert conflict_note_matching("riley", "%over your 16h weekly cap%", after_id), (
