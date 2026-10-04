@@ -1,6 +1,10 @@
 """Synchronous scheduler results remain available in the SQLite fallback."""
 
+import pytest
+
 import app as appmod
+
+pytestmark = pytest.mark.sqlite_only
 
 
 def test_sqlite_request_rebuild_returns_processed_pick_count(isolated_db):

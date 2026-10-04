@@ -1,5 +1,9 @@
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.sqlite_only
+
 
 def test_database_connection_uses_app_db_path_override(isolated_db):
     import app as appmod

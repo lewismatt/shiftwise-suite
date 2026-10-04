@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -34,6 +36,7 @@ class TestContainerDeployment(unittest.TestCase):
         data = response.get_json()
         self.assertEqual(data.get("status"), "ok")
 
+    @pytest.mark.sqlite_only
     def test_db_parent_directory_creation(self):
         # Ensure parent dir doesn't exist yet
         self.assertFalse(self.db_path.parent.exists())

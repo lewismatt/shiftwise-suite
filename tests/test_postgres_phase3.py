@@ -47,10 +47,13 @@ def _is_postgres_available():
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _is_postgres_available(),
-    reason="Live PostgreSQL server not reachable at " + POSTGRES_TEST_URL,
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not _is_postgres_available(),
+        reason="Live PostgreSQL server not reachable at " + POSTGRES_TEST_URL,
+    ),
+    pytest.mark.pg_own_isolation,
+]
 
 
 @pytest.fixture(autouse=True)

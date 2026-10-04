@@ -7,6 +7,8 @@ import app
 
 sdb = importlib.import_module("shiftwise.db")
 
+pytestmark = pytest.mark.sqlite_only
+
 
 def test_database_engine_selection(monkeypatch):
     # Explicit SQLite
