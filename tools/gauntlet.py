@@ -152,12 +152,26 @@ def workdays(username):
     return {r["day"] for r in rows}
 
 
-def has_conflict_note(username):
+def max_notification_id():
+    c = appmod.db()
+    r = c.execute("SELECT MAX(id) AS m FROM notifications").fetchone()
+    c.close()
+    return r["m"] or 0
+
+
+def conflict_note_matching(username, like, after_id):
+    """True iff a conflict notification for username was created after
+    after_id and its message matches the LIKE pattern.
+
+    Scoping to (username, message, id range) is what makes the stress-phase
+    assertions non-vacuous: stale notes from earlier phases can never
+    satisfy them.
+    """
     c = appmod.db()
     r = c.execute(
         "SELECT 1 FROM notifications n JOIN users u ON u.id=n.user_id "
-        "WHERE u.username=? AND n.kind='conflict'",
-        (username,),
+        "WHERE u.username=? AND n.kind='conflict' AND n.id > ? AND n.message LIKE ?",
+        (username, after_id, like),
     ).fetchone()
     c.close()
     return r is not None
@@ -167,12 +181,16 @@ def full_rank_form(day_to_ids, preferred_days):
     """Per-shift rank form preferring the given days (for cap/days-off stress).
 
     Ranks must be exactly 1..N with no gaps (the pick route validates this).
+    A running offset keeps ranks collision-free even when days have unequal
+    shift counts.
     """
     order = list(preferred_days) + [d for d in DAYS if d not in preferred_days]
     form = {}
-    for day_rank, day in enumerate(order):
-        for shift_rank, sid in enumerate(day_to_ids.get(day, []), 1):
-            form[f"rank_{sid}"] = str(day_rank * len(day_to_ids[day]) + shift_rank)
+    rank = 0
+    for day in order:
+        for sid in day_to_ids.get(day, []):
+            rank += 1
+            form[f"rank_{sid}"] = str(rank)
     return form
 
 
@@ -350,13 +368,14 @@ def run_gauntlet():
     login("sam")
     s_mine = my("sam")
     assert s_mine, "sam holds no shift to switch from"
+    sam_station = house_of("sam")
     full = (
         appmod.db()
         .execute(
-            "SELECT s.id, s.day FROM shifts s WHERE s.week_start=? AND (SELECT "
+            "SELECT s.id, s.day FROM shifts s WHERE s.week_start=? AND s.area=? AND (SELECT "
             "COUNT(*) FROM assignments a WHERE a.shift_id=s.id AND a.status NOT IN ('sick','swap_requested')) "
             ">= s.slots ORDER BY s.id LIMIT 1",
-            (WEEK,),
+            (WEEK, sam_station),
         )
         .fetchone()
     )
@@ -370,7 +389,9 @@ def run_gauntlet():
     login("manager")
     c = appmod.db()
     req = c.execute(
-        "SELECT id FROM requests WHERE kind='switch' AND status='approved' ORDER BY id DESC LIMIT 1"
+        "SELECT id FROM requests WHERE kind='switch' AND status='approved' "
+        "AND user_id=? AND shift_id=? ORDER BY id DESC LIMIT 1",
+        (uid("sam"), s_mine[0]["id"]),
     ).fetchone()
     assert req, "switch request was blocked up front instead of reaching review"
     client.post(f"/manager/requests/{req['id']}/approve", follow_redirects=True)
@@ -445,13 +466,16 @@ def run_gauntlet():
     ]
     c.execute("UPDATE users SET weekly_hours=16 WHERE username='riley'")
     c.commit()
+    after_id = c.execute("SELECT MAX(id) AS m FROM notifications").fetchone()["m"] or 0
     c.close()
     form = full_rank_form(day_shift_ids(house_of("riley")), ["Mon", "Tue", "Wed", "Fri", "Sat"])
     r = client.post("/pick", data=form, follow_redirects=True)
     assert b"Preferences saved" in r.data, "riley cap-stress pick rejected"
     hrs = assigned_hours("riley")
     assert hrs <= 16.01, f"riley over hours cap: {hrs:.1f}h > 16h"
-    assert has_conflict_note("riley"), "riley got no conflict notification for the over-pick"
+    assert conflict_note_matching("riley", "%over your 16h weekly cap%", after_id), (
+        "riley got no 16h-cap conflict notification for the over-pick"
+    )
     c = appmod.db()
     c.execute("UPDATE users SET weekly_hours=? WHERE username='riley'", (orig_cap,))
     c.commit()
@@ -459,19 +483,63 @@ def run_gauntlet():
     print(f"  riley held to {hrs:.0f}h/16h with conflict notice; cap restored to {orig_cap}h")
 
     # ---------- 12. days-off stress ----------
-    ph(12, "days-off stress: sam ranks 6 days despite the 2-days-off rule")
-    login("sam")
-    form = full_rank_form(
-        day_shift_ids(house_of("sam")), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sun"]
+    ph(12, "days-off stress: sam gets exclusive house access, ranks 6 days")
+    # For the 2-days-off rule to bind, sam must actually win shifts on 6+
+    # distinct days. Under real roster competition he only wins 3, so the
+    # rule never fires (false confidence). Quarantine: stash competitors'
+    # picks in sam's house and give sam a high cap so only the days-off
+    # rule can bind. Everything is restored afterwards.
+    sam_house = house_of("sam")
+    sam_uid = uid("sam")
+    c = appmod.db()
+    orig_cap = c.execute("SELECT weekly_hours FROM users WHERE username='sam'").fetchone()[
+        "weekly_hours"
+    ]
+    comp_picks = c.execute(
+        "SELECT p.user_id, p.shift_id, p.rank FROM picks p "
+        "JOIN users u ON u.id=p.user_id "
+        "JOIN shifts s ON s.id=p.shift_id "
+        "WHERE u.username!='sam' AND s.area=? AND s.week_start=?",
+        (sam_house, WEEK),
+    ).fetchall()
+    c.execute(
+        "DELETE FROM picks WHERE user_id != ? AND shift_id IN "
+        "(SELECT id FROM shifts WHERE area=? AND week_start=?)",
+        (sam_uid, sam_house, WEEK),
     )
+    # Cap must exceed the most sam could ever take unopposed (7 days x 3
+    # shifts x 8h = 168h) so the hours rule can never bind before the
+    # days-off rule does.
+    c.execute("UPDATE users SET weekly_hours=200 WHERE username='sam'")
+    c.commit()
+    after_id = c.execute("SELECT MAX(id) AS m FROM notifications").fetchone()["m"] or 0
+    c.close()
+    login("sam")
+    form = full_rank_form(day_shift_ids(sam_house), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sun"])
     r = client.post("/pick", data=form, follow_redirects=True)
     assert b"Preferences saved" in r.data, "sam 6-day pick rejected"
+    # Force the synchronous rebuild explicitly: on SQLite /pick already
+    # rebuilt, but on Postgres the rebuild is debounced and would race
+    # these assertions.
+    appmod.run_scheduler(WEEK)
     days = workdays("sam")
-    assert len(days) <= 5, (
-        f"sam works {len(days)} days, violating the 2-days-off rule: {sorted(days)}"
+    assert len(days) == 5, f"expected exactly 5 workdays, got {sorted(days)}"
+    assert conflict_note_matching("sam", "%days off this week%", after_id), (
+        "sam got no days-off conflict notification for the 6-day pick"
     )
-    assert has_conflict_note("sam"), "sam got no conflict notification for the 6-day pick"
-    print(f"  sam works {len(days)} days (max 5) with conflict notice")
+    print(f"  sam works {len(days)} days (max 5) with days-off notice")
+    # restore competitors' picks and sam's cap, then rebuild the schedule
+    c = appmod.db()
+    for pk in comp_picks:
+        c.execute(
+            "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)",
+            (pk["user_id"], pk["shift_id"], pk["rank"]),
+        )
+    c.execute("UPDATE users SET weekly_hours=? WHERE username='sam'", (orig_cap,))
+    c.commit()
+    c.close()
+    appmod.run_scheduler(WEEK)
+    print("  roster restored; schedule rebuilt")
 
     # ---------- 13. final audit ----------
     ph(13, "final audit")

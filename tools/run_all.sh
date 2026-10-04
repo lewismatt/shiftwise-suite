@@ -108,7 +108,6 @@ STEP=$((STEP + 1))
 echo "--> [${STEP}/${TOTAL}] Running Conflict Gauntlet (tools/gauntlet.py)..."
 "${PYTHON}" "${ROOT_DIR}/tools/gauntlet.py"
 
-
 echo ""
 STEP=$((STEP + 1))
 echo "--> [${STEP}/${TOTAL}] Running Chaos Simulation (tools/scenario_random.py, pinned seed)..."
