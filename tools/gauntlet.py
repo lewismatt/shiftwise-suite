@@ -222,6 +222,10 @@ def run_gauntlet():
         r = client.post("/pick", data=form, follow_redirects=True)
         assert b"Preferences saved" in r.data, u
     print("  all saved; schedule:")
+    # Force the synchronous rebuild explicitly: on SQLite /pick already
+    # rebuilt, but on Postgres the rebuild is debounced and would race
+    # the understaffed assertion below.
+    appmod.run_scheduler(WEEK)
     sched = schedule()
     for d, n, s, names in sched:
         print(f"    {d}: {n}/{s}  [{names}]")

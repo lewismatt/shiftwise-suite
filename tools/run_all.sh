@@ -83,28 +83,21 @@ echo "--> [0] Checking entrypoint executability (tools/check_entrypoints.py)..."
 "${PYTHON}" "${ROOT_DIR}/tools/check_entrypoints.py"
 
 echo ""
-if [[ "${MODE}" == "fast" ]]; then
-    echo "--> FAST MODE: unit & integration suite only."
-    echo "    The full gate must still pass before a PR or merge: ./tools/run_all.sh"
-    echo ""
-    "${PYTEST}" "${ROOT_DIR}/tests/"
-    echo ""
-    echo "FAST MODE OK"
-    exit 0
-fi
-
-if ! "${PYTHON}" -c "import pglast, pytest_timeout" >/dev/null 2>&1; then
-    echo "    NOTE: dev extras missing (pglast/pytest-timeout)."
-    echo "          Install with: .venv/bin/pip install -r requirements-dev.txt"
-    echo "          Without pglast the PostgreSQL DDL parser test is skipped."
-    echo ""
-fi
-
 # Detect the backend the app will actually use, mirroring shiftwise/db.py:
-# SHIFTWISE_DB_ENGINE wins; otherwise infer from DATABASE_URL.
-EFFECTIVE_ENGINE="${SHIFTWISE_DB_ENGINE:-}"
-if [[ -z "${EFFECTIVE_ENGINE}" ]]; then
-    case "${DATABASE_URL:-}" in
+# SHIFTWISE_DB_ENGINE wins (case-insensitive, validated); otherwise infer from
+# DATABASE_URL (case-insensitive scheme).
+if [[ -v SHIFTWISE_DB_ENGINE ]]; then
+    EFFECTIVE_ENGINE="${SHIFTWISE_DB_ENGINE,,}"
+    case "${EFFECTIVE_ENGINE}" in
+        sqlite|postgres|postgresql) ;;
+        *)
+            echo "ERROR: SHIFTWISE_DB_ENGINE must be one of: sqlite, postgres, postgresql." >&2
+            exit 1
+            ;;
+    esac
+else
+    _db_url="${DATABASE_URL:-}"
+    case "${_db_url,,}" in
         postgres://*|postgresql://*) EFFECTIVE_ENGINE="postgres" ;;
         *) EFFECTIVE_ENGINE="sqlite" ;;
     esac
@@ -121,19 +114,40 @@ if [[ "${EFFECTIVE_ENGINE}" == "postgres" || "${EFFECTIVE_ENGINE}" == "postgresq
     export TEST_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL}}"
 fi
 
+# The pytest target depends on the backend: the full suite is not yet
+# Postgres-safe (issue #39), so Postgres mode runs the regression modules,
+# mirroring the CI postgres job.
+if [[ "${IS_POSTGRES}" -eq 1 ]]; then
+    PYTEST_TARGET=("${ROOT_DIR}/tests/test_postgres_phase3.py" "${ROOT_DIR}/tests/test_postgres_phase4.py")
+    PYTEST_LABEL="Postgres Regression Tests"
+else
+    PYTEST_TARGET=("${ROOT_DIR}/tests/")
+    PYTEST_LABEL="Unit & Integration Test Suite"
+fi
+
+if [[ "${MODE}" == "fast" ]]; then
+    echo "--> FAST MODE: ${PYTEST_LABEL} only."
+    echo "    The full gate must still pass before a PR or merge: ./tools/run_all.sh"
+    echo ""
+    "${PYTEST}" "${PYTEST_TARGET[@]}"
+    echo ""
+    echo "FAST MODE OK"
+    exit 0
+fi
+
+if ! "${PYTHON}" -c "import pglast, pytest_timeout" >/dev/null 2>&1; then
+    echo "    NOTE: dev extras missing (pglast/pytest-timeout)."
+    echo "          Install with: .venv/bin/pip install -r requirements-dev.txt"
+    echo "          Without pglast the PostgreSQL DDL parser test is skipped."
+    echo ""
+fi
+
 STEP=0
 TOTAL=$((4 + RUN_LIVEWEEK))
 
 STEP=$((STEP + 1))
-if [[ "${IS_POSTGRES}" -eq 1 ]]; then
-    # The full suite is not yet Postgres-safe (issue #39): run the Postgres
-    # regression modules instead, mirroring the CI postgres job.
-    echo "--> [${STEP}/${TOTAL}] Running Postgres Regression Tests (pytest)..."
-    "${PYTEST}" "${ROOT_DIR}/tests/test_postgres_phase3.py" "${ROOT_DIR}/tests/test_postgres_phase4.py"
-else
-    echo "--> [${STEP}/${TOTAL}] Running Unit & Integration Test Suite (pytest)..."
-    "${PYTEST}" "${ROOT_DIR}/tests/"
-fi
+echo "--> [${STEP}/${TOTAL}] Running ${PYTEST_LABEL} (pytest)..."
+"${PYTEST}" "${PYTEST_TARGET[@]}"
 
 echo ""
 STEP=$((STEP + 1))
