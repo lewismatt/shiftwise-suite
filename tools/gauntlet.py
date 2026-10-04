@@ -1,6 +1,10 @@
 """One-shot conflict gauntlet: every feature + conflict in a single
 in-process run (zero network/LLM cost). Reseed -> 10x full-week picks ->
-conflict events incl. edge cases -> manager review -> audit."""
+conflict events incl. edge cases -> manager review -> audit.
+
+STRICT: every behavioral check is an assertion. A regression fails the
+run with a non-zero exit code; nothing is a printed observation.
+"""
 
 import os
 import sys
@@ -87,6 +91,20 @@ def shift_ids(area):
     return [row["id"] for row in rows]
 
 
+def day_shift_ids(area):
+    """Shift ids grouped by day for one house (for per-shift rank forms)."""
+    c = appmod.db()
+    rows = c.execute(
+        "SELECT id, day FROM shifts WHERE week_start=? AND area=? ORDER BY id",
+        (WEEK, area),
+    ).fetchall()
+    c.close()
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(row["day"], []).append(row["id"])
+    return grouped
+
+
 def my(u, status="notified"):
     c = appmod.db()
     r = c.execute(
@@ -97,6 +115,65 @@ def my(u, status="notified"):
     ).fetchall()
     c.close()
     return r
+
+
+def all_holdings(u):
+    c = appmod.db()
+    r = c.execute(
+        "SELECT s.id, s.day, a.status FROM assignments a "
+        "JOIN shifts s ON s.id=a.shift_id WHERE a.user_id=? AND s.week_start=?",
+        (uid(u), WEEK),
+    ).fetchall()
+    c.close()
+    return r
+
+
+def assigned_hours(username):
+    c = appmod.db()
+    rows = c.execute(
+        "SELECT s.start_time, s.end_time FROM assignments a "
+        "JOIN shifts s ON s.id=a.shift_id JOIN users u ON u.id=a.user_id "
+        "WHERE u.username=? AND s.week_start=? AND a.status NOT IN ('sick','swap_requested')",
+        (username, WEEK),
+    ).fetchall()
+    c.close()
+    return sum(appmod.shift_hours(r["start_time"], r["end_time"]) for r in rows)
+
+
+def workdays(username):
+    c = appmod.db()
+    rows = c.execute(
+        "SELECT DISTINCT s.day FROM assignments a "
+        "JOIN shifts s ON s.id=a.shift_id JOIN users u ON u.id=a.user_id "
+        "WHERE u.username=? AND s.week_start=? AND a.status NOT IN ('sick','swap_requested')",
+        (username, WEEK),
+    ).fetchall()
+    c.close()
+    return {r["day"] for r in rows}
+
+
+def has_conflict_note(username):
+    c = appmod.db()
+    r = c.execute(
+        "SELECT 1 FROM notifications n JOIN users u ON u.id=n.user_id "
+        "WHERE u.username=? AND n.kind='conflict'",
+        (username,),
+    ).fetchone()
+    c.close()
+    return r is not None
+
+
+def full_rank_form(day_to_ids, preferred_days):
+    """Per-shift rank form preferring the given days (for cap/days-off stress).
+
+    Ranks must be exactly 1..N with no gaps (the pick route validates this).
+    """
+    order = list(preferred_days) + [d for d in DAYS if d not in preferred_days]
+    form = {}
+    for day_rank, day in enumerate(order):
+        for shift_rank, sid in enumerate(day_to_ids.get(day, []), 1):
+            form[f"rank_{sid}"] = str(day_rank * len(day_to_ids[day]) + shift_rank)
+    return form
 
 
 def schedule():
@@ -134,48 +211,96 @@ def run_gauntlet():
         r = client.post("/pick", data=form, follow_redirects=True)
         assert b"Preferences saved" in r.data, u
     print("  all saved; schedule:")
-    for d, n, s, names in schedule():
+    sched = schedule()
+    for d, n, s, names in sched:
         print(f"    {d}: {n}/{s}  [{names}]")
+    understaffed = [f"{d} {n}/{s}" for d, n, s, _ in sched if n < s]
+    assert not understaffed, f"shifts left understaffed after full picks: {understaffed}"
 
     # ---------- 2. partial pick rejection ----------
     ph(2, "partial day-rank form REJECTED (only 6 days ranked)")
     login("maria")
     form = {f"rank_day_{day}": str(i + 1) for i, day in enumerate(DAYS[:6])}
     r = client.post("/pick", data=form, follow_redirects=True)
-    print("  rejected:", b"Rank all seven days" in r.data)
+    assert b"Rank all seven days" in r.data, "partial pick form was NOT rejected"
 
     # ---------- 3. sick call, two on same day ----------
     ph(3, "sick calls: maria + taylor both out on Monday")
+    called_sick = []
     for u in ("maria", "taylor"):
         login(u)
         m = [x for x in my(u) if x["day"] == "Mon"]
-        if m:
-            client.post(f"/request/sick/{m[0]['id']}", follow_redirects=True)
-            print(f"  {u} sick on Mon -> covered: {my(u, 'notified') and 'yes'}")
+        if not m:
+            print(f"  {u} holds no Monday shift — skipped")
+            continue
+        sid = m[0]["id"]
+        client.post(f"/request/sick/{sid}", follow_redirects=True)
+        c = appmod.db()
+        row = c.execute(
+            "SELECT status FROM assignments WHERE shift_id=? AND user_id=?",
+            (sid, uid(u)),
+        ).fetchone()
+        assert row and row["status"] == "sick", f"{u}: sick call did not mark assignment sick"
+        cover = c.execute(
+            "SELECT u.username FROM assignments a JOIN users u ON u.id=a.user_id "
+            "WHERE a.shift_id=? AND a.user_id!=? AND a.status='notified'",
+            (sid, uid(u)),
+        ).fetchone()
+        if not cover:
+            mgr = c.execute("SELECT id FROM users WHERE role='manager'").fetchone()
+            alert = c.execute(
+                "SELECT 1 FROM notifications WHERE user_id=? AND kind='conflict' "
+                "AND message LIKE 'No cover available%'",
+                (mgr["id"],),
+            ).fetchone()
+            assert alert, f"{u} sick on Mon: no coverer assigned and no manager alert"
+            print(f"  {u} sick on Mon -> no coverer; manager alerted")
+        else:
+            print(f"  {u} sick on Mon -> covered by {cover['username']}")
+        c.close()
+        called_sick.append(u)
+    assert called_sick, "nobody called in sick — phase tested nothing"
     print("  Mon now:", [f"{n}/{s}" for d, n, s, _ in schedule() if d == "Mon"])
 
     # ---------- 4. swap ----------
     ph(4, "swap: devon gives up a shift (auto-covered)")
     login("devon")
     d_mine = my("devon")
-    if d_mine:
-        tgt = d_mine[0]
-        before = f"{tgt['day']}"
-        client.post(f"/swap/{tgt['id']}", follow_redirects=True)
-        still = (
-            appmod.db()
-            .execute(
-                "SELECT 1 FROM assignments WHERE shift_id=? AND user_id=?",
-                (tgt["id"], uid("devon")),
-            )
-            .fetchone()
+    assert d_mine, "devon holds no shift to swap"
+    tgt = d_mine[0]
+    client.post(f"/swap/{tgt['id']}", follow_redirects=True)
+    c = appmod.db()
+    row = c.execute(
+        "SELECT status FROM assignments WHERE shift_id=? AND user_id=?",
+        (tgt["id"], uid("devon")),
+    ).fetchone()
+    if row is None:
+        cover = c.execute(
+            "SELECT u.username FROM assignments a JOIN users u ON u.id=a.user_id "
+            "WHERE a.shift_id=? AND a.status IN ('notified','coverage_fixed')",
+            (tgt["id"],),
+        ).fetchone()
+        assert cover, "devon swapped out but nobody holds the shift"
+        req = c.execute(
+            "SELECT 1 FROM requests WHERE user_id=? AND kind='swap' AND shift_id=? "
+            "AND status='approved_ok'",
+            (uid("devon"), tgt["id"]),
+        ).fetchone()
+        assert req, "swap covered but no approved_ok request row recorded"
+        print(f"  devon released {tgt['day']}; covered by {cover['username']}")
+    else:
+        assert row["status"] == "swap_requested", (
+            f"devon swap left unexpected status {row['status']}"
         )
-        print(f"  devon released {before}; row removed: {still is None}")
+        print(f"  devon released {tgt['day']}; swap_requested, manager alerted")
+    c.close()
 
     # ---------- 5. day off ----------
     ph(5, "day off: priya drops Wednesday")
     login("priya")
     client.post("/request/day_off", data={"day": "Wed"}, follow_redirects=True)
+    wed_left = [x for x in all_holdings("priya") if x["day"] == "Wed"]
+    assert not wed_left, f"priya still holds Wednesday shifts after day off: {wed_left}"
     print("  Wed now:", [f"{n}/{s}" for d, n, s, _ in schedule() if d == "Wed"])
 
     # ---------- 6. vacation ----------
@@ -189,8 +314,26 @@ def run_gauntlet():
         data={"vac_start": vs.isoformat(), "vac_end": ve.isoformat()},
         follow_redirects=True,
     )
-    print(f"  alex vacation {vs}..{ve}: saved={b'Vacation requested' in r.data}")
-    print("  alex now holds:", [x["day"] for x in my("alex")] or "nothing (all in range)")
+    assert b"Vacation requested" in r.data, "vacation request was not accepted"
+    c = appmod.db()
+    req = c.execute(
+        "SELECT vacation_start, vacation_end FROM requests WHERE user_id=? AND kind='vacation' "
+        "ORDER BY id DESC LIMIT 1",
+        (uid("alex"),),
+    ).fetchone()
+    assert (
+        req and req["vacation_start"] == vs.isoformat() and req["vacation_end"] == ve.isoformat()
+    ), "vacation request row missing or has wrong range"
+    held = c.execute(
+        "SELECT s.day FROM assignments a JOIN shifts s ON s.id=a.shift_id "
+        "JOIN users u ON u.id=a.user_id WHERE u.username='alex' AND s.week_start=?",
+        (WEEK,),
+    ).fetchall()
+    c.close()
+    base = date.fromisoformat(WEEK)
+    in_range = [r["day"] for r in held if vs <= base + timedelta(days=DAYS.index(r["day"])) <= ve]
+    assert not in_range, f"alex still holds in-vacation shifts: {in_range}"
+    print(f"  alex vacation {vs}..{ve} recorded; in-range shifts dropped")
 
     # ---------- 7. vacation, past-dated (rejected) ----------
     ph(7, "vacation with past start -> rejected")
@@ -200,12 +343,13 @@ def run_gauntlet():
         data={"vac_start": "2026-09-01", "vac_end": "2026-09-05"},
         follow_redirects=True,
     )
-    print("  rejected:", b"past" in r.data)
+    assert b"past" in r.data, "past-dated vacation was NOT rejected"
 
     # ---------- 8. switch + manager deny ----------
     ph(8, "switch request into a FULL shift -> manager approval auto-denies")
     login("sam")
     s_mine = my("sam")
+    assert s_mine, "sam holds no shift to switch from"
     full = (
         appmod.db()
         .execute(
@@ -217,44 +361,53 @@ def run_gauntlet():
         .fetchone()
     )
     mine_ids = {x["id"] for x in s_mine}
-    if full and full["id"] not in mine_ids:
-        client.post(
-            f"/request/switch/{s_mine[0]['id']}",
-            data={"target_shift": full["id"]},
-            follow_redirects=True,
-        )
-        login("manager")
-        c = appmod.db()
-        req = c.execute(
-            "SELECT id FROM requests WHERE kind='switch' AND "
-            "status='approved' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        if req:
-            client.post(f"/manager/requests/{req['id']}/approve", follow_redirects=True)
-            row = c.execute("SELECT status FROM requests WHERE id=?", (req["id"],)).fetchone()
-            print(f"  switch into {full['day']} (full): result={row['status']}")
-        else:
-            print("  switch route blocked it up front")
-        c.close()
-    else:
-        print("  no full shift to test against")
+    assert full and full["id"] not in mine_ids, "no full shift available to test switch-into-full"
+    client.post(
+        f"/request/switch/{s_mine[0]['id']}",
+        data={"target_shift": full["id"]},
+        follow_redirects=True,
+    )
+    login("manager")
+    c = appmod.db()
+    req = c.execute(
+        "SELECT id FROM requests WHERE kind='switch' AND status='approved' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert req, "switch request was blocked up front instead of reaching review"
+    client.post(f"/manager/requests/{req['id']}/approve", follow_redirects=True)
+    row = c.execute("SELECT status FROM requests WHERE id=?", (req["id"],)).fetchone()
+    assert row["status"] == "denied", (
+        f"switch into full shift was not denied (status={row['status']})"
+    )
+    kept = c.execute(
+        "SELECT 1 FROM assignments WHERE shift_id=? AND user_id=?",
+        (s_mine[0]["id"], uid("sam")),
+    ).fetchone()
+    c.close()
+    assert kept, "sam lost his original shift after the denied switch"
+    print(f"  switch into {full['day']} (full): denied; sam keeps his shift")
 
     # ---------- 9. manager unassign + instant backfill ----------
     ph(9, "manager unassigns jordan -> slot backfills instantly")
     login("manager")
     j_mine = my("jordan")
-    if j_mine:
-        tgt = j_mine[0]
-        client.post(f"/manager/unassign/{tgt['id']}/{uid('jordan')}", follow_redirects=True)
-        c = appmod.db()
-        who = c.execute(
-            "SELECT u.name FROM assignments a JOIN users u ON u.id=a.user_id "
-            "WHERE a.shift_id=? AND a.user_id!=? AND a.status='notified' "
-            "ORDER BY a.id DESC LIMIT 1",
-            (tgt["id"], uid("jordan")),
-        ).fetchone()
-        c.close()
-        print(f"  jordan pulled off {tgt['day']}; backfilled by {who['name'] if who else 'NOBODY'}")
+    assert j_mine, "jordan holds no shift to unassign"
+    tgt = j_mine[0]
+    client.post(f"/manager/unassign/{tgt['id']}/{uid('jordan')}", follow_redirects=True)
+    c = appmod.db()
+    gone = c.execute(
+        "SELECT 1 FROM assignments WHERE shift_id=? AND user_id=?",
+        (tgt["id"], uid("jordan")),
+    ).fetchone()
+    assert not gone, "jordan still holds the shift after unassign"
+    who = c.execute(
+        "SELECT u.name FROM assignments a JOIN users u ON u.id=a.user_id "
+        "WHERE a.shift_id=? AND a.user_id!=? AND a.status='notified' "
+        "ORDER BY a.id DESC LIMIT 1",
+        (tgt["id"], uid("jordan")),
+    ).fetchone()
+    c.close()
+    assert who, f"shift {tgt['day']} was not backfilled after unassign"
+    print(f"  jordan pulled off {tgt['day']}; backfilled by {who['name']}")
 
     # ---------- 10. roster change ----------
     ph(10, "roster change: add new part-timer (avery), they pick all 21 shifts")
@@ -277,21 +430,56 @@ def run_gauntlet():
     c.close()
     login("avery", "avery-private-passphrase")
     avery_ids = shift_ids(house_of("avery"))
+    assert len(avery_ids) == 21, f"expected 21 shifts in avery's house, got {len(avery_ids)}"
     form = {f"rank_{sid}": str(i + 1) for i, sid in enumerate(avery_ids)}
     r = client.post("/pick", data=form, follow_redirects=True)
-    print("  avery picked all 21 shifts:", b"Preferences saved" in r.data)
-    c = appmod.db()
-    avery_holds = c.execute(
-        "SELECT COUNT(*) c FROM assignments a JOIN users u ON "
-        "u.id=a.user_id WHERE u.username='avery'"
-    ).fetchone()["c"]
-    c.close()
-    print(f"  avery auto-assigned {avery_holds} shifts")
+    assert b"Preferences saved" in r.data, "avery's 21-shift pick was rejected"
+    print("  avery picked all 21 shifts: accepted")
 
-    # ---------- 11. final audit ----------
-    ph(11, "final audit")
-    for d, n, s, names in schedule():
+    # ---------- 11. hours-cap stress ----------
+    ph(11, "hours-cap stress: riley capped at 16h ranks 5 days")
+    login("riley")
+    c = appmod.db()
+    orig_cap = c.execute("SELECT weekly_hours FROM users WHERE username='riley'").fetchone()[
+        "weekly_hours"
+    ]
+    c.execute("UPDATE users SET weekly_hours=16 WHERE username='riley'")
+    c.commit()
+    c.close()
+    form = full_rank_form(day_shift_ids(house_of("riley")), ["Mon", "Tue", "Wed", "Fri", "Sat"])
+    r = client.post("/pick", data=form, follow_redirects=True)
+    assert b"Preferences saved" in r.data, "riley cap-stress pick rejected"
+    hrs = assigned_hours("riley")
+    assert hrs <= 16.01, f"riley over hours cap: {hrs:.1f}h > 16h"
+    assert has_conflict_note("riley"), "riley got no conflict notification for the over-pick"
+    c = appmod.db()
+    c.execute("UPDATE users SET weekly_hours=? WHERE username='riley'", (orig_cap,))
+    c.commit()
+    c.close()
+    print(f"  riley held to {hrs:.0f}h/16h with conflict notice; cap restored to {orig_cap}h")
+
+    # ---------- 12. days-off stress ----------
+    ph(12, "days-off stress: sam ranks 6 days despite the 2-days-off rule")
+    login("sam")
+    form = full_rank_form(
+        day_shift_ids(house_of("sam")), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sun"]
+    )
+    r = client.post("/pick", data=form, follow_redirects=True)
+    assert b"Preferences saved" in r.data, "sam 6-day pick rejected"
+    days = workdays("sam")
+    assert len(days) <= 5, (
+        f"sam works {len(days)} days, violating the 2-days-off rule: {sorted(days)}"
+    )
+    assert has_conflict_note("sam"), "sam got no conflict notification for the 6-day pick"
+    print(f"  sam works {len(days)} days (max 5) with conflict notice")
+
+    # ---------- 13. final audit ----------
+    ph(13, "final audit")
+    sched = schedule()
+    for d, n, s, names in sched:
         print(f"    {d}: {n}/{s}  [{names}]")
+    overcap = [f"{d} {n}/{s}" for d, n, s, _ in sched if n > s]
+    assert not overcap, f"capacity violations in final audit: {overcap}"
     c = appmod.db()
     sick = c.execute(
         "SELECT u.username, s.day FROM assignments a JOIN users u ON "
