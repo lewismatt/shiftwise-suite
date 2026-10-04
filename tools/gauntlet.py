@@ -152,13 +152,6 @@ def workdays(username):
     return {r["day"] for r in rows}
 
 
-def max_notification_id():
-    c = appmod.db()
-    r = c.execute("SELECT MAX(id) AS m FROM notifications").fetchone()
-    c.close()
-    return r["m"] or 0
-
-
 def conflict_note_matching(username, like, after_id):
     """True iff a conflict notification for username was created after
     after_id and its message matches the LIKE pattern.
