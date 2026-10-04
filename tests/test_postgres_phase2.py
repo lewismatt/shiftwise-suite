@@ -1,12 +1,10 @@
 """Phase 2 tests: PostgreSQL DDL, per-engine init_db, and DB-cascade reliance.
 
-No live PostgreSQL server is available in this environment, so server-side
-execution (real cascade deletes, orphan checks) is validated by inspection
-and left for the reviewer with a live database. These tests pin the DDL
-structure, prove init_db() dispatches to the PostgreSQL DDL, prove
+These tests pin the DDL structure, prove init_db() dispatches to the PostgreSQL DDL, prove
 mock_seed's SQL survives the psycopg placeholder translation through the
 real facade classes, and prove the delete routes rely on DB cascades on
 PostgreSQL while keeping the manual cascades on SQLite.
+Live server regressions are in test_postgres_phase3.py and test_postgres_phase4.py.
 """
 
 import importlib
@@ -39,6 +37,7 @@ TABLES = (
     "requests",
     "notifications",
     "login_attempts",
+    "scheduler_rebuilds",
 )
 
 
@@ -123,7 +122,7 @@ def test_postgres_ddl_parses_as_valid_postgres():
 
 def test_split_ddl_yields_individual_create_statements():
     statements = sdb._split_ddl(sdb.POSTGRES_SCHEMA)
-    assert len(statements) == 8
+    assert len(statements) == len(TABLES)
     assert all(s.startswith("CREATE TABLE IF NOT EXISTS") for s in statements)
 
 
@@ -185,6 +184,9 @@ class _Rows:
     def fetchone(self):
         return self._rows[0] if self._rows else None
 
+    def __iter__(self):
+        return iter(self._rows)
+
 
 class _RecordingConn:
     """Stands in for a DB connection: records statements, answers canned reads."""
@@ -195,9 +197,12 @@ class _RecordingConn:
         self.events = []  # ordered event log ("execute", "commit", ...)
         self.committed = False
         self.closed = False
+        self.in_transaction = False
         self._handler = handler or (lambda sql, params: [])
 
     def execute(self, sql, params=()):
+        if sql == "BEGIN IMMEDIATE":
+            self.in_transaction = True
         self.statements.append((sql, params))
         self.events.append("execute")
         return _Rows(self._handler(sql, params))
@@ -504,7 +509,7 @@ def test_mock_seed_runs_cleanly_through_postgres_facade():
 
 
 def _auth_handler(sql, params):
-    if sql.startswith("SELECT role FROM users"):
+    if sql.startswith("SELECT * FROM users WHERE id="):
         return [{"id": 1, "role": "manager"}]
     return []
 

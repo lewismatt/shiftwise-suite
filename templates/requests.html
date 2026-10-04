@@ -14,7 +14,7 @@
     <td data-label="Detail">
       {% if r.kind == 'day_off' %}<strong>{{ r.day }}</strong>
       {% elif r.kind == 'vacation' %}<strong>{{ r.vacation_start }} → {{ r.vacation_end }}</strong>
-        {% if r.status == 'approved' %}<br><span class="tag warn" style="white-space:normal; margin-top:4px">Review proposed coverage: it may put someone over weekly hours or the 5-day limit. You decide whether to approve.</span>{% endif %}
+        {% if r.status == 'approved' %}<br><span class="tag warn" style="white-space:normal; margin-top:4px">Review proposed coverage before approving. Automatic coverage respects weekly hours and the 5-day limit.</span>{% endif %}
         {% if r.coverage_gaps %}<br><span class="tag warn" style="margin-top:4px">Coverage needed: {{ r.coverage_gaps|join(', ') }}</span>
         {% elif r.status == 'approved' %}<br><span class="tag ok" style="margin-top:4px">All affected shifts covered</span>{% endif %}
       {% elif r.kind == 'switch' %}{{ r.shift_desc }} &rarr; {{ r.target_desc }}

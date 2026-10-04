@@ -42,14 +42,17 @@ def calendar_days(conn, week, user_id, area=None):
         shifts = conn.execute(
             "SELECT * FROM shifts WHERE week_start=? ORDER BY id", (week,)
         ).fetchall()
+    staff = defaultdict(list)
+    for row in conn.execute(
+        "SELECT a.shift_id, a.status, a.user_id, u.name FROM assignments a "
+        "JOIN users u ON u.id=a.user_id JOIN shifts s ON s.id=a.shift_id "
+        "WHERE s.week_start=? AND a.status NOT IN ('sick','swap_requested') ORDER BY a.id",
+        (week,),
+    ):
+        staff[row["shift_id"]].append(row)
     by_day = defaultdict(list)
     for s in shifts:
-        rows = conn.execute(
-            "SELECT a.status, a.user_id, u.name FROM assignments a "
-            "JOIN users u ON u.id=a.user_id WHERE a.shift_id=? "
-            "AND a.status NOT IN ('sick','swap_requested')",
-            (s["id"],),
-        ).fetchall()
+        rows = staff[s["id"]]
         status = next((r["status"] for r in rows if r["user_id"] == user_id), None)
         by_day[s["day"]].append(
             {

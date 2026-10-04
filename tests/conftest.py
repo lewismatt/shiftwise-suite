@@ -25,3 +25,9 @@ def isolated_db():
     temp_dir = isolate_database(appmod)
     yield appmod
     temp_dir.cleanup()
+
+
+@pytest.fixture(autouse=True)
+def disable_scheduler_worker(monkeypatch):
+    # Tests explicitly drive queued work; do not let a poller outlive a test DB.
+    monkeypatch.setitem(appmod.app.config, "SCHEDULER_WORKER_ENABLED", False)

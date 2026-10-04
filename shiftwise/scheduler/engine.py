@@ -1,41 +1,18 @@
 """Shift scheduling engine and automatic round-based assignment."""
 
 from collections import defaultdict
-from datetime import date, timedelta
+from contextlib import closing
 
-from shiftwise.db import begin_write, db
-from shiftwise.domain.constants import DAYS, MIN_DAYS_OFF
+from shiftwise.db import database_engine, db, read_queries, try_scheduler_lock
+from shiftwise.domain.constants import MIN_DAYS_OFF
 from shiftwise.domain.rules import (
-    assignment_block_reason,
+    _assignment_limit_reason,
+    _unavailability_query,
     priority_key,
     shift_hours,
-    unavailable_uids,
 )
-from shiftwise.notify import notify
+from shiftwise.notify import notify_many
 from shiftwise.scheduler.coverage import coverage_plan
-
-
-def _vacated_by_pending_vacation(conn, shift):
-    """True when a pending vacation is holding a slot on this shift open.
-
-    Only these gaps may be backfilled by someone who would otherwise exceed
-    their weekly hours or days-off limit: the vacation created the gap, and
-    the manager already reviews that request knowing the cover may go over.
-    Gaps from anything else (sick calls, unfilled picks) stay inside the caps.
-    """
-    shift_date = (
-        date.fromisoformat(shift["week_start"]) + timedelta(days=DAYS.index(shift["day"]))
-    ).isoformat()
-    return (
-        conn.execute(
-            "SELECT 1 FROM requests r JOIN users u ON u.id=r.user_id "
-            "WHERE r.kind='vacation' AND r.status='approved' "
-            "AND r.vacation_start<=? AND r.vacation_end>=? "
-            "AND u.role='employee' AND u.station=? LIMIT 1",
-            (shift_date, shift_date, shift["area"]),
-        ).fetchone()
-        is not None
-    )
 
 
 class _SchedulerState:
@@ -52,11 +29,11 @@ class _SchedulerState:
         self.actor = actor
         # Filled in by the phases, in call order:
         self.notification_start = 0
+        self.notifications = []
         self.shifts = []
         self.shift_ids = []
         self.ph = ""
         self.shift_by_id = {}
-        self.vacation_gap = {}
         self.unavailable = {}
         self.previous = defaultdict(set)
         self.previous_staffed = defaultdict(int)
@@ -73,49 +50,53 @@ class _SchedulerState:
         self.area_of = {}
         self.user_prefs = defaultdict(lambda: defaultdict(list))
 
+    def notify(self, user_id, kind, message, shift_id=None):
+        self.notifications.append((user_id, kind, message, shift_id))
+
 
 def _begin_week(state):
     """Begin the scheduling run: open the write transaction, snapshot the
     notification watermark, and load the week's shifts.
 
-    Returns False when the week has no shifts (nothing to schedule).
+    The caller already owns the week transaction lock. Returns False when
+    the week has no shifts (nothing to schedule).
 
     Reads: state.conn, state.week_start.
     Mutates: state.notification_start, state.shifts, state.shift_ids.
     """
     conn = state.conn
-    begin_write(conn)
     state.notification_start = conn.execute(
         "SELECT COALESCE(MAX(id), 0) FROM notifications"
     ).fetchone()[0]
+    lock = " FOR NO KEY UPDATE" if database_engine() == "postgres" else ""
     state.shifts = conn.execute(
-        "SELECT * FROM shifts WHERE week_start=? ORDER BY id", (state.week_start,)
+        "SELECT * FROM shifts WHERE week_start=? ORDER BY id" + lock, (state.week_start,)
     ).fetchall()
     state.shift_ids = [s["id"] for s in state.shifts]
     return bool(state.shift_ids)
 
 
 def _collect_inputs(state):
-    """Load the data the assignment rounds need: vacation-held gaps,
-    per-shift unavailable sets, the previous assignment snapshot, picks,
+    """Load the data the assignment rounds need: per-shift unavailable
+    sets, the previous assignment snapshot, picks,
     users, and prior conflict notifications. Also evicts holders whose
     pending swap keeps them listed as unavailable for their own shift.
 
     Reads: state.conn, state.shifts, state.shift_ids, state.notification_start.
-    Mutates: state.vacation_gap, state.ph, state.shift_by_id, state.unavailable,
+    Mutates: state.ph, state.shift_by_id, state.unavailable,
         state.previous, state.previous_staffed, state.picks, state.users,
         state.prior_conflicts; DB (deletes swap-evicted assignment rows).
     """
     conn = state.conn
     shifts = state.shifts
     shift_ids = state.shift_ids
-    # Slots a pending vacation holds open are the only ones that may be
-    # backfilled over the hours/days limits — see the helper above.
-    state.vacation_gap = {s["id"]: _vacated_by_pending_vacation(conn, s) for s in shifts}
     state.ph = ",".join("?" * len(shift_ids))
     ph = state.ph
     state.shift_by_id = {s["id"]: s for s in shifts}
-    state.unavailable = {s["id"]: unavailable_uids(conn, s) for s in shifts}
+    unavailable = read_queries(conn, [_unavailability_query(s) for s in shifts])
+    state.unavailable = {
+        shift["id"]: {row["user_id"] for row in rows} for shift, rows in zip(shifts, unavailable)
+    }
     for r in conn.execute(
         f"SELECT shift_id, user_id FROM assignments WHERE shift_id IN ({ph}) "
         "AND status NOT IN ('sick','swap_requested')",
@@ -260,6 +241,7 @@ def _run_assignment_rounds(state):
         return sid in area_of and my_area[uid] == area_of[sid]
 
     max_rank = max((max(prefs) for prefs in user_prefs.values()), default=0)
+    new_assignments = []
     for rnd in range(1, max_rank + 1):
         # who wants a slot this round, highest priority first
         # (contested slots go to the most senior / full-time employee)
@@ -275,11 +257,22 @@ def _run_assignment_rounds(state):
         for _, uid, sid in claimants:
             if sid in [a[0] for a in user_assignments[uid]]:
                 continue
-            reason = assignment_block_reason(conn, uid, shift_by_id[sid])
+            reason = (
+                "unavailable"
+                if uid in state.unavailable[sid]
+                else _assignment_limit_reason(
+                    [
+                        shift_by_id[assigned_sid]
+                        for assigned_sid, marker in user_assignments[uid]
+                        if marker != "absent"
+                    ],
+                    users[uid]["weekly_hours"],
+                    shift_by_id[sid],
+                )
+            )
             if reason == "hours":
                 if actor == "system":
-                    notify(
-                        conn,
+                    state.notify(
                         uid,
                         "conflict",
                         f"Passing on {shift_by_id[sid]['day']} — it would put "
@@ -288,8 +281,7 @@ def _run_assignment_rounds(state):
                 continue
             if reason == "days":
                 if actor == "system":
-                    notify(
-                        conn,
+                    state.notify(
                         uid,
                         "conflict",
                         f"Passing on {shift_by_id[sid]['day']} — you need "
@@ -302,20 +294,21 @@ def _run_assignment_rounds(state):
                 assigned[sid] += 1
                 user_hours[uid] += shift_hours_map[sid]
                 user_assignments[uid].append((sid, False))
-                conn.execute(
-                    "INSERT INTO assignments (shift_id, user_id) VALUES (?,?) ON CONFLICT DO NOTHING",
-                    (sid, uid),
-                )
+                new_assignments.append((sid, uid))
             elif actor == "system":
                 shift = shift_by_id[sid]
-                notify(
-                    conn,
+                state.notify(
                     uid,
                     "conflict",
                     f"Your #{rnd} pick ({shift['day']} "
                     f"{shift['start_time']}-{shift['end_time']}) was full — "
                     "trying your next choice.",
                 )
+    with closing(conn.cursor()) as cursor:
+        cursor.executemany(
+            "INSERT INTO assignments (shift_id, user_id) VALUES (?,?) ON CONFLICT DO NOTHING",
+            new_assignments,
+        )
 
 
 def _backfill_coverage(state):
@@ -329,7 +322,7 @@ def _backfill_coverage(state):
 
     Reads: state.actor, state.conn, state.week_start, state.shifts,
         state.capacity, state.assigned, state.user_hours,
-        state.user_assignments, state.shift_hours_map, state.vacation_gap,
+        state.user_assignments, state.shift_hours_map,
         state.previous_staffed.
     Mutates: DB (inserts/updates assignments, writes notifications);
         state.assigned, state.user_hours, state.user_assignments.
@@ -344,7 +337,6 @@ def _backfill_coverage(state):
     user_hours = state.user_hours
     user_assignments = state.user_assignments
     shift_hours_map = state.shift_hours_map
-    vacation_gap = state.vacation_gap
     previous_staffed = state.previous_staffed
     # Capacity math: assigned[] counts real workers only (sick rows
     # were never counted), so a shift with 2 slots + 1 sick row + 0
@@ -355,7 +347,11 @@ def _backfill_coverage(state):
             continue
         for _ in range(open_n):
             cover_uid = coverage_plan(
-                conn, week_start, s["id"], None, allow_over_limits=vacation_gap[s["id"]]
+                conn,
+                week_start,
+                s["id"],
+                None,
+                _shift_locked=True,
             )
             if cover_uid is None:
                 mgr = conn.execute("SELECT id FROM users WHERE role='manager'").fetchone()
@@ -371,8 +367,7 @@ def _backfill_coverage(state):
                         (mgr["id"], s["id"]),
                     ).fetchone()
                     if previous_staffed[s["id"]] >= capacity[s["id"]] or not prior_alert:
-                        notify(
-                            conn,
+                        state.notify(
                             mgr["id"],
                             "conflict",
                             f"No cover available for {s['day']} "
@@ -395,20 +390,12 @@ def _backfill_coverage(state):
             assigned[s["id"]] += 1
             user_hours[cover_uid] += shift_hours_map[s["id"]]
             user_assignments[cover_uid].append((s["id"], False))
-            notify(
-                conn,
+            state.notify(
                 cover_uid,
                 "assignment",
                 f"Coverage: you're now on {s['day']} "
                 f"{s['start_time']}-{s['end_time']} (covering an "
-                "open slot)."
-                + (
-                    " This vacation option may exceed "
-                    "your weekly hours or workday limit; check with your "
-                    "manager before confirming."
-                    if vacation_gap[s["id"]]
-                    else ""
-                ),
+                "open slot).",
             )
 
 
@@ -424,25 +411,26 @@ def _resolve_swaps(state):
     conn = state.conn
     capacity = state.capacity
     assigned = state.assigned
+    pending = defaultdict(list)
+    for row in conn.execute(
+        f"SELECT shift_id, user_id FROM assignments WHERE shift_id IN ({state.ph}) "
+        "AND status='swap_requested'",
+        state.shift_ids,
+    ):
+        pending[row["shift_id"]].append(row["user_id"])
     for s in state.shifts:
         if assigned[s["id"]] < capacity[s["id"]]:
             continue
-        for row in conn.execute(
-            "SELECT user_id FROM assignments WHERE shift_id=? AND status='swap_requested'",
-            (s["id"],),
-        ).fetchall():
-            conn.execute(
-                "DELETE FROM assignments WHERE shift_id=? AND user_id=?", (s["id"], row["user_id"])
-            )
+        for uid in pending[s["id"]]:
+            conn.execute("DELETE FROM assignments WHERE shift_id=? AND user_id=?", (s["id"], uid))
             conn.execute(
                 "UPDATE requests SET status='approved_ok' WHERE "
                 "kind='swap' AND status='approved' AND shift_id=? "
                 "AND user_id=?",
-                (s["id"], row["user_id"]),
+                (s["id"], uid),
             )
-            notify(
-                conn,
-                row["user_id"],
+            state.notify(
+                uid,
                 "assignment",
                 f"Swap covered for {s['day']} {s['start_time']}-{s['end_time']}.",
             )
@@ -462,26 +450,25 @@ def _notify_schedule_changes(state):
     users = state.users
     previous = state.previous
     shift_by_id = state.shift_by_id
-    for uid, prefs in state.user_prefs.items():
+    current = defaultdict(set)
+    for row in conn.execute(
+        f"SELECT user_id, shift_id FROM assignments WHERE shift_id IN ({ph}) "
+        "AND status NOT IN ('sick','swap_requested')",
+        shift_ids,
+    ):
+        current[row["user_id"]].add(row["shift_id"])
+    for uid in state.user_prefs:
         u = users.get(uid)
         if not u:
             continue
-        got = {
-            r["shift_id"]
-            for r in conn.execute(
-                f"SELECT shift_id FROM assignments WHERE user_id=? AND shift_id IN ({ph}) "
-                "AND status NOT IN ('sick','swap_requested')",
-                (uid, *shift_ids),
-            )
-        }
+        got = current[uid]
         if got == previous[uid]:
             continue
         if got:
             days = ", ".join(shift_by_id[s]["day"] for s in sorted(got))
-            notify(conn, uid, "assignment", f"Schedule posted: you're on {days} this week.")
+            state.notify(uid, "assignment", f"Schedule posted: you're on {days} this week.")
         else:
-            notify(
-                conn,
+            state.notify(
                 uid,
                 "conflict",
                 "None of your picks had room this week — check open shifts or message the manager.",
@@ -491,12 +478,12 @@ def _notify_schedule_changes(state):
 def _finalize_week(state):
     """Mark fresh proposed assignments as 'notified' so the next rebuild
     can tell whether anything changed for this employee, drop notifications
-    for unchanged schedules, and commit the week.
+    for unchanged schedules. The caller commits the week.
 
     Reads: state.conn, state.ph, state.shift_ids, state.users, state.previous,
-        state.prior_conflicts, state.notification_start.
-    Mutates: DB (updates assignments to 'notified', deletes notifications
-        for unchanged schedules, commits).
+        state.prior_conflicts, state.notifications.
+    Mutates: DB (updates assignments to 'notified', inserts buffered
+        notifications for changed schedules).
     """
     conn = state.conn
     ph = state.ph
@@ -509,22 +496,34 @@ def _finalize_week(state):
             WHERE shift_id IN ({ph}) AND status='proposed'""",
         shift_ids,
     )
-    for uid in state.users:
-        current = {
-            r["shift_id"]
-            for r in conn.execute(
-                f"SELECT shift_id FROM assignments WHERE user_id=? "
-                f"AND shift_id IN ({ph}) "
-                "AND status NOT IN ('sick','swap_requested')",
-                (uid, *shift_ids),
-            )
-        }
-        if current == state.previous[uid] and (current or uid in state.prior_conflicts):
-            conn.execute(
-                "DELETE FROM notifications WHERE user_id=? AND id>?",
-                (uid, state.notification_start),
-            )
-    conn.commit()
+    current = defaultdict(set)
+    for row in conn.execute(
+        f"SELECT user_id, shift_id FROM assignments WHERE shift_id IN ({ph}) "
+        "AND status NOT IN ('sick','swap_requested')",
+        shift_ids,
+    ):
+        current[row["user_id"]].add(row["shift_id"])
+    unchanged = {
+        uid
+        for uid in state.users
+        if current[uid] == state.previous[uid] and (current[uid] or uid in state.prior_conflicts)
+    }
+    notify_many(conn, [entry for entry in state.notifications if entry[0] not in unchanged])
+
+
+def _schedule_week(conn, week_start, actor="system"):
+    """Rebuild using a connection that already owns the week transaction lock."""
+    state = _SchedulerState(conn, week_start, actor)
+    if not _begin_week(state):
+        return 0
+    _collect_inputs(state)
+    _prepare_rebuild(state)
+    _run_assignment_rounds(state)
+    _backfill_coverage(state)
+    _resolve_swaps(state)
+    _notify_schedule_changes(state)
+    _finalize_week(state)
+    return len(state.picks)
 
 
 def run_scheduler(week_start, actor="system"):
@@ -535,10 +534,8 @@ def run_scheduler(week_start, actor="system"):
     (earliest hire date first). In round N every employee claims their
     rank-N pick; contested slots go to the highest-priority employee in
     line. Employees are never scheduled past their weekly hours cap
-    (full-time default 40h, part-time as set on the roster), with one
-    exception: a slot a pending vacation is holding open may be offered to
-    an over-cap coverer so the manager can review it. If a slot is
-    full, the employee falls through to their next pick — the best
+    (full-time default 40h, part-time as set on the roster), including
+    coverage for pending vacations. If a slot is full, the employee falls through to their next pick — the best
     available alternative on their ranked list — and gets a notification
     explaining the fallback. When their whole list is exhausted they get a
     'nothing had room' notification.
@@ -546,19 +543,16 @@ def run_scheduler(week_start, actor="system"):
     Rebuild semantics: every call wipes the week's auto assignments and
     recomputes them. Confirmed, approved switch, and arranged coverage
     assignments stay fixed. Sick and pending swap rows leave capacity open.
+
+    Returns the number of picks processed by the completed rebuild, or 0
+    when there are no shifts/picks or another run owns this week's lock.
     """
     conn = db()
     try:
-        state = _SchedulerState(conn, week_start, actor)
-        if not _begin_week(state):
+        if not try_scheduler_lock(conn, week_start):
             return 0
-        _collect_inputs(state)
-        _prepare_rebuild(state)
-        _run_assignment_rounds(state)
-        _backfill_coverage(state)
-        _resolve_swaps(state)
-        _notify_schedule_changes(state)
-        _finalize_week(state)
-        return len(state.picks)
+        result = _schedule_week(conn, week_start, actor)
+        conn.commit()
+        return result
     finally:
         conn.close()

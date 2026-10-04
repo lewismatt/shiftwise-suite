@@ -2,15 +2,18 @@
 
 from collections import defaultdict
 
+from shiftwise.db import lock_shifts, lock_users
 from shiftwise.domain.rules import (
+    _assignment_limit_reason,
     assignment_block_reason,
     priority_key,
     shift_hours,
+    unavailable_uids,
 )
 from shiftwise.notify import notify
 
 
-def coverage_plan(conn, week, out_shift_id, out_uid, allow_over_limits=False):
+def coverage_plan(conn, week, out_shift_id, out_uid, *, _shift_locked=False):
     """Pick the next-in-line coverer for a shift its holder is leaving.
 
     Only considers coverers whose station matches the shift's area
@@ -23,8 +26,18 @@ def coverage_plan(conn, week, out_shift_id, out_uid, allow_over_limits=False):
     least-loaded person covers first. Returns a user id or None if
     nobody can legally take it.
     """
+    if not _shift_locked:
+        lock_shifts(conn, [out_shift_id])
     shift = conn.execute("SELECT * FROM shifts WHERE id=?", (out_shift_id,)).fetchone()
     if not shift:
+        return None
+    # A swap replaces its departing holder; backfill and sick calls add staff.
+    staffed = conn.execute(
+        "SELECT COUNT(*) FROM assignments WHERE shift_id=? "
+        "AND status NOT IN ('sick','swap_requested') AND user_id!=?",
+        (out_shift_id, out_uid if out_uid is not None else -1),
+    ).fetchone()[0]
+    if staffed >= shift["slots"]:
         return None
     employees = conn.execute(
         "SELECT * FROM users WHERE role='employee' AND station=? ORDER BY id", (shift["area"],)
@@ -39,10 +52,20 @@ def coverage_plan(conn, week, out_shift_id, out_uid, allow_over_limits=False):
         (week, out_shift_id),
     ).fetchall()
     hours = defaultdict(float)
+    assignments = defaultdict(list)
     for r in arows:
         if r["status"] in ("sick", "swap_requested"):
             continue
         hours[r["user_id"]] += shift_hours(r["start_time"], r["end_time"])
+        assignments[r["user_id"]].append(r)
+    unavailable = unavailable_uids(conn, shift)
+    unwilling = {
+        row["user_id"]
+        for row in conn.execute(
+            "SELECT user_id FROM coverage_preferences WHERE shift_id=? AND NOT willing",
+            (out_shift_id,),
+        )
+    }
     # people already on this shift are not cover candidates (slots are 1
     # per person — UNIQUE(shift_id, user_id))
     already_on = {
@@ -52,17 +75,18 @@ def coverage_plan(conn, week, out_shift_id, out_uid, allow_over_limits=False):
 
     def can_cover(u):
         uid = u["id"]
-        if uid in already_on:
+        if uid in already_on or uid in unavailable or uid in unwilling:
             return False
-        preference = conn.execute(
-            "SELECT willing FROM coverage_preferences WHERE user_id=? AND shift_id=?",
-            (uid, out_shift_id),
-        ).fetchone()
-        if preference and not preference["willing"]:
+        if _assignment_limit_reason(assignments[uid], u["weekly_hours"], shift):
             return False
-        return (
-            assignment_block_reason(conn, uid, shift, allow_over_limits=allow_over_limits) is None
-        )
+        # The scheduler owns every shift in this week, making this snapshot
+        # stable. Standalone coverage must re-read after its employee lock:
+        # another shift's coverage may have just committed additional hours.
+        if _shift_locked:
+            return True
+        if uid not in lock_users(conn, [uid], skip_locked=True):
+            return False
+        return assignment_block_reason(conn, uid, shift) is None
 
     # 1. people who picked this shift but didn't get it — best in lineup.
     # With out_uid=None (backfill pass) every picker is eligible to be
@@ -93,6 +117,7 @@ def apply_sick(conn, uid, shift_id, week=None):
     the shift as 'notified' + a notification. If nobody can legally
     cover, the manager gets an alert.
     """
+    lock_shifts(conn, [shift_id])
     a = conn.execute(
         "SELECT * FROM assignments WHERE shift_id=? AND user_id=?", (shift_id, uid)
     ).fetchone()

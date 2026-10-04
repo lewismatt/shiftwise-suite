@@ -1,10 +1,10 @@
 # PostgreSQL Migration Plan & Development Handoff
 
-> Status: Phase 1 complete (merged 2026-10-01) · Phase 2 complete (merged 2026-10-01) · Phases 3–5 pending · Target: Multi-worker concurrency, zero-lock contention, multi-store scalability · Last updated: 2026-10-01
+> Status: Phases 1–5 complete · Phase 4 delivered in PR #35 · Last updated: 2026-10-03
 
 This document serves as the complete, step-by-step engineering specification and forward handoff for migrating ShiftWise Suite from SQLite to PostgreSQL. Any future agent or engineer can pick up this roadmap and implement it phase-by-phase without ambiguity.
 
-> **Current state (2026-10-01):** Phase 1 is merged to `master` as `59549352` (PR #16). Phase 2 (schema & constraints) is merged to `master` as `28792e34` (PR #17): PostgreSQL DDL with declarative `ON DELETE CASCADE` / `ON DELETE SET NULL` FKs, per-engine `init_db()` dispatch, and engine-conditional cascade deletions in the delete routes. Next up: Phase 3 (query & route migration).
+> **Current state (2026-10-03):** Phases 1–3 and 5 are delivered in PRs #16, #17, #30 and #31. PR #34 contained the Phase 4 checklist only. PR #35 completes the Phase 4 implementation and review follow-up.
 
 ---
 
@@ -243,7 +243,7 @@ instead of leaking it. Full suite green on the merged head: 89 passed.
 
 ---
 
-### Phase 4: Scheduler Concurrency, Advisory Locks & Debounce — IN PROGRESS (this PR)
+### Phase 4: Scheduler Concurrency, Advisory Locks & Debounce — COMPLETE (PR #35)
 
 **Objective:** Solve the core scheduling bottleneck (C1, C3) using PostgreSQL transaction advisory locks and asynchronous coalescing.
 
@@ -279,6 +279,164 @@ instead of leaking it. Full suite green on the merged head: 89 passed.
   - 0 `database is locked` exceptions.
   - 0 capacity violations (Issue C2 resolved).
   - P95 request latency drops below 200ms.
+
+#### Implementation and operation
+
+PostgreSQL uses `scheduler_rebuilds`, with one row per week, a server-clock
+`due_at`, and a generation counter. `/pick` batches the preference writes and
+updates the queue in the same transaction. Each successful enqueue moves the
+deadline to 500 ms after the submission. Other automatic route rebuilds use
+the same queue; the manager's explicit rebuild still calls the scheduler.
+
+Each web process starts a daemon poller on its first request, after Gunicorn
+forks and startup initializes the schema. Health checks also start the poller,
+so persisted requests resume after a restart. Pollers check every 100 ms and
+use the same transaction advisory lock as direct scheduler calls. They recheck
+the deadline after acquiring the lock. Rebuild and acknowledgment commit
+atomically. Failed runs roll back and leave work for retry. A generation
+updated during a rebuild remains pending for another settled run. The queue
+row stays unlocked during computation so submitting picks does not wait for it.
+
+A control table was chosen because a process-local timer cannot coalesce work
+across Gunicorn processes and loses requests on restart. This implementation
+needs no external queue service. SQLite retains `begin_write` and synchronous
+rebuilds for the existing single-process CLI tools and fallback tests.
+
+Staffing writers lock shift rows in ID order before reading assignments.
+Capacity is counted in a separate statement after the lock, so a transaction
+that waited sees the preceding writer's committed staffing. The scheduler uses
+`FOR NO KEY UPDATE` on the week's shifts to permit preference foreign-key
+checks while computing; its coverage phase reuses those locks. Other coverage
+and manager assignment paths use `FOR UPDATE`. Switches, swap responses and
+cascading deletions follow the same shift-first lock order. Only active
+assignments consume slots; reactivating a sick or pending-swap row still needs
+an open slot. PostgreSQL lock modes are described in the
+[PostgreSQL 16 documentation](https://www.postgresql.org/docs/16/explicit-locking.html#LOCKING-ROWS).
+
+`GET /` only reads notifications. The dashboard's **Mark all as read** form
+posts to `/notifications/read-all`, with session authentication and CSRF
+protection. Scheduler notifications are buffered until the run knows which
+schedules changed, so deduplication does not delete another request's messages.
+
+Automatic vacation coverage also respects hours and days-off limits. A gap
+stays open when nobody has room, and vacation approval requires coverage.
+The former over-limit exception has been removed.
+
+This scope was explicitly requested by the user during Phase 4
+implementation: "Also fix vacation coverage limits." SQLite regressions
+`test_vacation_coverage_respects_hours_caps` and
+`test_vacation_coverage_respects_days_off` cover both limits. PostgreSQL
+regressions `test_vacation_backfill_cannot_exceed_employee_hours` and
+`test_vacation_backfill_cannot_consume_required_day_off` cover the same rules.
+
+Standalone coverage locks the candidate employee before validating their hours, so
+coverage on different shifts cannot independently consume the same remaining
+hours. Scheduler coverage uses its protected week snapshot. Explicit manager
+assignments keep their existing override authority.
+The liveweek audit reports over-cap manager overrides as MEDIUM and still
+reports excessive automatic assignments as HIGH; it does not discard either.
+
+For PostgreSQL latency acceptance, use the same liveweek harness with
+`--workers 4 --threads 8`. This starts four local Gunicorn workers with eight threads each;
+no additional container stack is needed. SQLite and default harness runs keep
+the single-process threaded Werkzeug server. `summary.json` includes P95
+latency across every HTTP hop, including login and each redirected request.
+It also retains whole-action P95, including the combined POST and redirected
+GET time. `Response.ms` and slow-action findings retain that combined timing.
+`--threads` defaults to two. The larger acceptance setting lets lightweight
+requests proceed while other request threads verify passwords or wait on locks.
+The container's worker defaults are unchanged.
+
+The manager-review drill excludes coworker invites, which only the invited
+employee can resolve. It accepts an explicitly refused approval when coverage
+is unavailable and still reports unexplained pending requests as HIGH. These
+measurement and scenario contracts are covered by `tests/test_liveweek_audit.py`.
+
+The sick-versus-swap drill counts only requests created after its pre-race
+request-ID watermark. Retained requests from earlier actions cannot establish
+duplicate effects of the current race. A regression covers both a historical
+denied swap plus one new request (allowed) and two new requests (still HIGH).
+
+Regression coverage is in `tests/test_postgres_phase4.py` (set
+`TEST_DATABASE_URL` to a disposable PostgreSQL database) and
+`tests/test_notifications_read.py`. The PostgreSQL tests create and remove an
+isolated schema for each case. Run the strict seed-42 acceptance check against
+a separate disposable database: liveweek seeds and changes its target data.
+
+#### Scheduler return-value audit (PR #35)
+
+`run_scheduler()` remains synchronous and returns the processed-pick count,
+or 0 when the week has no work or its advisory lock is busy.
+`request_rebuild()` returns an enqueue sentinel of 0 on PostgreSQL; the
+rebuild happens later. SQLite retains the synchronous count. Its docstring
+states that callers needing completion or a count must use `run_scheduler()`.
+
+All 16 automatic route call sites discard `request_rebuild()`'s return:
+eight in `manager.py`, four in `employee.py`, two in `conflicts.py`, and two
+in `roster.py`. These modules import it under the local name `run_scheduler`.
+The pick route separately enqueues inside its transaction without using a count.
+
+The explicit `/manager/run` route consumes the count through
+`run_scheduler_now`, imported from the synchronous engine. The PostgreSQL
+manager-route regression asserts a nonzero count in its flash and completed
+assignments before the response. The queued-request regression asserts durable
+work with no assignments until processing.
+
+CLI calls in `tools/scenario_random.py`, `docker-entrypoint.sh`, and
+`shiftwise-mock/sync.sh` use the synchronous facade and discard its return.
+The preexisting tests that consume the engine return are
+`test_manager_pick.py` (diagnostic count), `test_postgres_phase3.py`
+(positive processed count), and `test_postgres_phase4.py` (busy-lock zero).
+All other preexisting test calls discard it. Facade/package exports still
+point to the synchronous engine. No count consumer was switched to the queue.
+
+#### Review re-verification (2026-10-03, PR #35)
+
+- Full `TEST_DATABASE_URL=<disposable PostgreSQL URL> ./tools/run_all.sh`:
+  154 passed, no skips; all simulations, default liveweek and Compose passed.
+- `ruff check`, `ruff format --check`, and `git diff --check`: clean.
+- Strict PostgreSQL seed 42, 120 seconds, four workers and eight threads:
+  exit 0; 4,502 HTTP requests; 0 HTTP 5xx; 0 server exceptions;
+  0 database-is-locked or capacity findings; request P95 184.3 ms.
+  Whole-action P95 including redirects was 269.6 ms.
+- Eight MEDIUM reports remain: five invite consistency reports, overlapping
+  vacations, switch feedback, and an explicit manager hours override.
+- An initial strict run exited 2 because the sick/swap drill counted historical
+  requests. Database evidence showed an earlier denied swap (#166) and one
+  new swap (#238); the sick action created no request. The audit regression
+  failed before the watermark correction and passed afterward. Both the full
+  gate and strict PostgreSQL acceptance above were rerun after that correction.
+- Default SQLite liveweek remains report-only: 14 HIGH and 6 MEDIUM findings.
+  These are retained separately from PostgreSQL acceptance.
+
+Tests and liveweek used separate databases in a disposable PostgreSQL 16
+container; the application database was untouched. Evidence is retained at
+`/tmp/shiftwise-pr35-full-gate-final.log` and
+`/tmp/shiftwise-pr35-strict-postgres-final/`. The initial failed strict run is
+retained at `/tmp/shiftwise-pr35-strict-postgres/`.
+
+#### Initial local acceptance evidence (2026-10-03)
+
+PostgreSQL 16 from the repository compose service, seed 42, 120 seconds,
+four Gunicorn workers with eight threads each, no screenshots:
+
+- 4,656 HTTP requests; 0 HTTP 5xx; 0 server exceptions.
+- 0 `database is locked` errors; 0 capacity violations.
+- HTTP request P95: 176.7 ms. Whole-action P95 including redirects: 253.9 ms.
+- Strict exit 0, with 0 CRITICAL and 0 HIGH findings. Five MEDIUM findings
+  remain: two invite consistency reports, one hours warning from an explicit
+  manager override, overlapping vacation requests, and switch feedback.
+- The concurrency regressions verify 20 simultaneous pick submissions produce
+  one settled rebuild, plus rollback, restart and generation retention.
+- Full `./tools/run_all.sh`: 148 tests passed, including 23 live PostgreSQL
+  cases, followed by the gauntlet, scenarios, default liveweek and Compose check.
+  Ruff lint and format checks passed. Default SQLite liveweek reported existing
+  orphan findings under the gate's report-only contract; PostgreSQL acceptance
+  above is strict.
+
+This measures direct loopback requests and the local PostgreSQL container,
+without Caddy or external network latency. The full gate and ruff checks are
+required again whenever the implementation changes.
 
 ---
 
@@ -365,5 +523,5 @@ When an agent begins work on any phase:
    ```
    *(Note: during rapid iteration, `./tools/run_all.sh --fast` or `./tools/run_all.sh --no-liveweek` can be used for intermediate checks, but the full gate must be green before PR completion.)*
 6. **Open PR & Review:**
-   - Deliver via GitHub PR (`gh pr create`).
-   - Cross-reference `docs/POSTGRES_MIGRATION_PLAN.md` and mark the phase complete.
+   - For Phase 4, open a draft GitHub PR (`gh pr create --draft`) and leave it unmerged.
+   - After merge, mark Phase 4 COMPLETE with the implementation PR number.

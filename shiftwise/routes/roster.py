@@ -18,10 +18,17 @@ from flask import (
 from werkzeug.security import generate_password_hash
 
 from shiftwise.auth import login_required
-from shiftwise.db import UNIQUE_VIOLATION_ERRORS, database_engine, db, monday_of
+from shiftwise.db import (
+    UNIQUE_VIOLATION_ERRORS,
+    begin_write,
+    database_engine,
+    db,
+    lock_shifts,
+    monday_of,
+)
 from shiftwise.domain.rules import valid_email, valid_phone
 from shiftwise.notify import notify, send_schedule_link
-from shiftwise.scheduler.engine import run_scheduler
+from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
 
 roster_bp = Blueprint("roster", __name__)
 
@@ -167,6 +174,11 @@ def delete_employee(user_id):
         flash("Confirm employee deletion before continuing.")
         return redirect(url_for("roster.roster"))
     conn = db()
+    begin_write(conn)
+    # Cascading account deletion touches staffing and requests; take the same
+    # shift-first order as rebuilds, including shifts named by pending invites.
+    shift_ids = [r[0] for r in conn.execute("SELECT id FROM shifts ORDER BY id")]
+    lock_shifts(conn, shift_ids)
     employee = conn.execute(
         "SELECT id FROM users WHERE id=? AND role='employee'", (user_id,)
     ).fetchone()

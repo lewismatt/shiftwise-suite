@@ -64,6 +64,7 @@ def postgres_env(monkeypatch):
     init_db(seed_demo=False)
     conn = db()
     for table in (
+        "scheduler_rebuilds",
         "picks",
         "coverage_preferences",
         "assignments",
@@ -81,6 +82,7 @@ def postgres_env(monkeypatch):
 
     conn = db()
     for table in (
+        "scheduler_rebuilds",
         "picks",
         "coverage_preferences",
         "assignments",
@@ -356,7 +358,7 @@ def test_postgres_scheduler_and_routes_flow():
     )
     assert b"Log out" in r.data
 
-    # 2. View dashboard: triggers UPDATE notifications SET read=TRUE
+    # 2. View dashboard without changing notification state
     dash = client.get("/")
     assert dash.status_code == 200
 

@@ -101,11 +101,10 @@ When an assigned shift is vacated, `coverage_plan(conn, week, out_shift_id, out_
 2. **Least-Loaded Backup:** If no unfilled pickers are eligible, falls back to any eligible employee in the same station, prioritizing whoever has the fewest assigned hours.
 3. **Notification:** The new coverer receives an in-app assignment notification; if no legal coverer exists, the manager is alerted.
 
-Slots that a **pending vacation** is holding open are the only gaps that may be
-backfilled past an employee's hours or days-off limit (`_vacated_by_pending_vacation`
-in `shiftwise/scheduler/engine.py`); gaps from sick calls, unfilled picks, or
-manager unassignments stay inside the caps. That is the coverage the requests
-page flags as "Review proposed coverage".
+Automatic coverage, including gaps held open by pending vacations, stays within
+an employee's weekly hours and days-off limits. If no eligible employee has room,
+the shift remains open and the manager receives a coverage-needed notification.
+Vacation approval remains blocked until affected shifts have enough staff.
 
 ---
 

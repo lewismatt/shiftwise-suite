@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 from functools import wraps
 
-from flask import abort, redirect, request, session, url_for
+from flask import abort, g, redirect, request, session, url_for
 from werkzeug.routing import BuildError
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -127,13 +127,14 @@ def login_required(role=None):
             if "uid" not in session:
                 return redirect(_login_url())
             conn = db()
-            user = conn.execute("SELECT role FROM users WHERE id=?", (session["uid"],)).fetchone()
+            user = conn.execute("SELECT * FROM users WHERE id=?", (session["uid"],)).fetchone()
             conn.close()
             if not user:
                 session.clear()
                 return redirect(_login_url())
             if role and (user["role"] != role or session.get("role") != role):
                 abort(403)
+            g.current_user = user
             return f(*a, **kw)
 
         return wrapper
