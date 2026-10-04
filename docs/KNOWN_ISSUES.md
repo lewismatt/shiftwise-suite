@@ -9,7 +9,7 @@ PR**, branched from current `master`.
 
 ## How to use this backlog
 
-### Phase 4 implementation (2026-10-03, awaiting review)
+### Phase 4 implementation (2026-10-03, PR #35)
 
 C1/C3 are addressed on PostgreSQL by week advisory locks and a durable 500 ms
 rebuild queue; dashboard reads no longer acknowledge notifications. C2 is
@@ -22,7 +22,7 @@ Coverage on different shifts locks the candidate employee before checking
 hours (H2). Explicit manager overrides retain their existing authority and
 remain visible in liveweek reports. SQLite keeps synchronous rebuilds and
 `begin_write`; these changes do not establish PostgreSQL performance guarantees
-for SQLite. Mark C1–C3 FIXED with the implementation PR number after merge.
+for SQLite. C1–C3 are FIXED for PostgreSQL in PR #35.
 
 1. Pick the highest-severity unfixed item.
 2. Read the linked liveweek issue files in `tools/liveweek-artifacts/` for
@@ -36,6 +36,8 @@ for SQLite. Mark C1–C3 FIXED with the implementation PR number after merge.
 ## CRITICAL
 
 ### C1 — `database is locked` causes HTTP 500 under concurrent load
+
+**Status:** FIXED for PostgreSQL (PR #35); SQLite retains its compatibility path.
 
 **Severity:** CRITICAL · **Reproducible:** Yes (every liveweek run)  
 **Seeds:** 42 (7 occurrences), 9999 (5 occurrences)
@@ -81,6 +83,8 @@ graceful-degradation path.
 
 ### C2 — Capacity violation: shifts over-staffed beyond `slots`
 
+**Status:** FIXED for PostgreSQL (PR #35).
+
 **Severity:** CRITICAL · **Reproducible:** Yes (seed 9999)  
 **Seeds:** 9999 (confirmed in audit)
 
@@ -107,6 +111,8 @@ serialized lock. A read-then-insert pattern allows two writers to both see
 ---
 
 ### C3 — Pick storm: multiple 5xx during all-employee concurrent submission
+
+**Status:** FIXED for PostgreSQL (PR #35); SQLite retains synchronous rebuilds.
 
 **Severity:** CRITICAL · **Reproducible:** Yes (both seeds)  
 **Seeds:** 42 (4 requests → 5xx), 9999 (1 request → 5xx)
@@ -403,9 +409,9 @@ For full implementation details, task checklists, and forward engineering handof
 
 | ID | Sev | Category | Status |
 |---|---|---|---|
-| C1 | CRITICAL | `database is locked` → 500 | PHASE 4 REVIEW (PostgreSQL) |
-| C2 | CRITICAL | Capacity violation (over-staffing) | PHASE 4 REVIEW |
-| C3 | CRITICAL | Pick storm 5xx | PHASE 4 REVIEW (PostgreSQL) |
+| C1 | CRITICAL | `database is locked` → 500 | FIXED (PostgreSQL, PR #35) |
+| C2 | CRITICAL | Capacity violation (over-staffing) | FIXED (PostgreSQL, PR #35) |
+| C3 | CRITICAL | Pick storm 5xx | FIXED (PostgreSQL, PR #35) |
 | H1 | HIGH | Orphan rows after shift delete | OPEN |
 | H2 | HIGH | Hours cap violated | OPEN |
 | H3 | HIGH | Days-off rule violated | OPEN |

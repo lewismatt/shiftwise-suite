@@ -543,6 +543,9 @@ def run_scheduler(week_start, actor="system"):
     Rebuild semantics: every call wipes the week's auto assignments and
     recomputes them. Confirmed, approved switch, and arranged coverage
     assignments stay fixed. Sick and pending swap rows leave capacity open.
+
+    Returns the number of picks processed by the completed rebuild, or 0
+    when there are no shifts/picks or another run owns this week's lock.
     """
     conn = db()
     try:

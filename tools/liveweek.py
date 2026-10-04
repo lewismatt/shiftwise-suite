@@ -1720,6 +1720,9 @@ def drill_sick_vs_swap(ctx):
     sess = sess_sick  # same user; used for DB queries below
     mine = ctx.world.my_ok_assignments(sess.uid)
     a = ctx.rng.choice(mine)
+    # Requests are retained as history. Only rows created by this collision
+    # window can demonstrate duplicate effects of the racing actions.
+    before = ctx.world.one("SELECT COALESCE(MAX(id), 0) AS id FROM requests")["id"]
     bar = threading.Barrier(2)
     out = {}
 
@@ -1738,17 +1741,17 @@ def drill_sick_vs_swap(ctx):
         th.join()
     dup = ctx.world.q(
         "SELECT COUNT(*) c FROM requests WHERE user_id=? AND shift_id=? AND "
-        "kind IN ('swap','sick')",
-        (sess.uid, a["shift_id"]),
+        "kind IN ('swap','sick') AND id>?",
+        (sess.uid, a["shift_id"], before),
     )
     n_dup = dup[0]["c"] if dup else 0
     if n_dup > 1:
         ctx.rec.issue(
             "HIGH",
             "behavior_mismatch",
-            "drill sick_vs_swap: both the sick call and the swap "
-            f"created requests for the same shift ({n_dup} rows)",
-            {"shift": a["shift_id"], "actor": sess.actor},
+            "drill sick_vs_swap: racing actions created multiple new "
+            f"requests for the same shift ({n_dup} rows)",
+            {"shift": a["shift_id"], "actor": sess.actor, "after_request_id": before},
             actor=sess.actor,
             phase=ctx.phase,
             drill="sick_vs_swap",

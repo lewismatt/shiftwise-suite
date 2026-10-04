@@ -61,6 +61,58 @@ def test_manager_review_queue_excludes_employee_owned_invites(isolated_db, tmp_p
     ] == ["day_off"]
 
 
+@pytest.mark.parametrize("new_sick_request", [False, True])
+def test_sick_swap_drill_ignores_history_but_detects_new_duplicates(
+    isolated_db, tmp_path, monkeypatch, new_sick_request
+):
+    appmod.init_db(seed_demo=True)
+    conn = appmod.db()
+    uid, actor = conn.execute(
+        "SELECT id, username FROM users WHERE role='employee' ORDER BY id"
+    ).fetchone()
+    sid = conn.execute("SELECT id FROM shifts ORDER BY id").fetchone()[0]
+    conn.execute(
+        "INSERT INTO assignments (user_id, shift_id, status) VALUES (?, ?, 'confirmed')",
+        (uid, sid),
+    )
+    conn.execute(
+        "INSERT INTO requests (user_id, shift_id, kind, status, created_at) "
+        "VALUES (?, ?, 'swap', 'denied', '2026-10-03')",
+        (uid, sid),
+    )
+    conn.commit()
+    conn.close()
+
+    def post(path):
+        kind = "swap" if path.startswith("/swap/") else "sick"
+        if kind == "swap" or new_sick_request:
+            conn = appmod.db()
+            conn.execute(
+                "INSERT INTO requests (user_id, shift_id, kind, created_at) "
+                "VALUES (?, ?, ?, '2026-10-03')",
+                (uid, sid, kind),
+            )
+            conn.commit()
+            conn.close()
+        return SimpleNamespace(status=200)
+
+    sess = SimpleNamespace(uid=uid, actor=actor, post=post)
+    monkeypatch.setattr(liveweek, "fresh_session", lambda *args: sess)
+    rec = Recorder(tmp_path)
+    ctx = SimpleNamespace(
+        world=World(appmod.DB_PATH, rec, appmod),
+        rec=rec,
+        rng=random.Random(0),
+        base="http://test",
+        phase="drills",
+        emp_sessions=[sess],
+    )
+    liveweek.drill_sick_vs_swap(ctx)
+    assert bool(rec.issues) is new_sick_request
+    if new_sick_request:
+        assert rec.issues[0]["severity"] == "HIGH"
+
+
 @pytest.mark.parametrize("refusal", [True, False])
 def test_double_review_requires_an_explanation_for_pending_status(tmp_path, monkeypatch, refusal):
     result = SimpleNamespace(

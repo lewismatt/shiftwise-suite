@@ -21,7 +21,14 @@ def enqueue_rebuild(conn, week):
 
 
 def request_rebuild(week, actor="system"):
-    """Queue automatic PostgreSQL rebuilds; retain the SQLite CLI behavior."""
+    """Request an automatic rebuild; callers must not use a processed-pick count.
+
+    PostgreSQL commits queued work and returns 0 as an enqueue sentinel. The
+    scheduler has not run yet, so this is not a count of processed picks.
+    SQLite runs synchronously and returns the engine's processed-pick count.
+    Call run_scheduler() directly when a completed rebuild or its count is
+    required, as the explicit manager rebuild and CLI entrypoints do.
+    """
     if database_engine() == "sqlite":
         from shiftwise.scheduler.engine import run_scheduler
 

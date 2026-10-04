@@ -73,6 +73,45 @@ def pending():
         conn.close()
 
 
+def test_request_rebuild_queues_without_claiming_processed_picks(pg):
+    week, sid, users, _ = pg
+    conn = appmod.db()
+    conn.execute("INSERT INTO picks (user_id, shift_id, rank) VALUES (?, ?, 1)", (users[0], sid))
+    conn.commit()
+    conn.close()
+
+    assert appmod.request_rebuild(week) == 0
+    assert pending()[0] == 1
+    conn = appmod.db()
+    assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == 0
+    conn.close()
+    settle()
+    assert appmod.process_rebuilds() == 1
+    assert pending() is None
+    conn = appmod.db()
+    assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == 1
+    conn.close()
+
+
+def test_manager_rebuild_reports_synchronous_processed_pick_count(pg):
+    _, sid, users, manager = pg
+    conn = appmod.db()
+    conn.executemany(
+        "INSERT INTO picks (user_id, shift_id, rank) VALUES (?, ?, 1)",
+        [(uid, sid) for uid in users[:3]],
+    )
+    conn.commit()
+    conn.close()
+
+    response = client_for(manager, "manager").post("/manager/run", follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Scheduler ran over 3 picks" in response.data
+    assert pending() is None
+    conn = appmod.db()
+    assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == 1
+    conn.close()
+
+
 def test_week_lock_skips_same_week_allows_other_week_and_releases(pg):
     week, *_ = pg
     owner = appmod.db()
@@ -336,6 +375,45 @@ def test_vacation_backfill_cannot_exceed_employee_hours(pg):
     assert (
         conn.execute("SELECT COUNT(*) FROM assignments WHERE user_id=?", (users[0],)).fetchone()[0]
         == 1
+    )
+    conn.close()
+
+
+def test_vacation_backfill_cannot_consume_required_day_off(pg):
+    week, sid, users, _ = pg
+    conn = appmod.db()
+    conn.execute("UPDATE users SET station='back' WHERE role='employee'")
+    conn.execute("UPDATE users SET station='front', weekly_hours=40 WHERE id IN (?, ?)", users[:2])
+    for day in ("Tue", "Wed", "Thu", "Fri", "Sat"):
+        shift = conn.execute(
+            "INSERT INTO shifts (week_start, day, start_time, end_time, slots) "
+            "VALUES (?, ?, '09:00', '10:00', 1) RETURNING id",
+            (week, day),
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO assignments (shift_id, user_id, status) VALUES (?, ?, 'manager_fixed')",
+            (shift, users[0]),
+        )
+    conn.execute(
+        "INSERT INTO assignments (shift_id, user_id, status) VALUES (?, ?, 'confirmed')",
+        (sid, users[1]),
+    )
+    conn.execute(
+        "INSERT INTO requests (user_id, kind, status, vacation_start, vacation_end) "
+        "VALUES (?, 'vacation', 'approved', ?, ?)",
+        (users[1], week, week),
+    )
+    conn.commit()
+    conn.close()
+
+    appmod.run_scheduler(week)
+    conn = appmod.db()
+    assert (
+        conn.execute("SELECT COUNT(*) FROM assignments WHERE shift_id=?", (sid,)).fetchone()[0] == 0
+    )
+    assert (
+        conn.execute("SELECT COUNT(*) FROM assignments WHERE user_id=?", (users[0],)).fetchone()[0]
+        == 5
     )
     conn.close()
 
