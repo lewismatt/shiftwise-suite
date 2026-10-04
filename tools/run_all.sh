@@ -14,6 +14,10 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 #   ./tools/run_all.sh --liveweek-seconds N   override the live-week duration (default 60)
 #
 # SHIFTWISE_LIVEWEEK_SECONDS also overrides the live-week duration.
+#
+# DATABASE_URL=<postgres-url> (or SHIFTWISE_DB_ENGINE=postgres) runs the gate
+# against PostgreSQL: the pytest step runs the Postgres regression modules and
+# liveweek targets the given database (see AGENTS.md section 4).
 
 MODE="full"
 RUN_LIVEWEEK=1
@@ -96,12 +100,40 @@ if ! "${PYTHON}" -c "import pglast, pytest_timeout" >/dev/null 2>&1; then
     echo ""
 fi
 
+# Detect the backend the app will actually use, mirroring shiftwise/db.py:
+# SHIFTWISE_DB_ENGINE wins; otherwise infer from DATABASE_URL.
+EFFECTIVE_ENGINE="${SHIFTWISE_DB_ENGINE:-}"
+if [[ -z "${EFFECTIVE_ENGINE}" ]]; then
+    case "${DATABASE_URL:-}" in
+        postgres://*|postgresql://*) EFFECTIVE_ENGINE="postgres" ;;
+        *) EFFECTIVE_ENGINE="sqlite" ;;
+    esac
+fi
+IS_POSTGRES=0
+if [[ "${EFFECTIVE_ENGINE}" == "postgres" || "${EFFECTIVE_ENGINE}" == "postgresql" ]]; then
+    IS_POSTGRES=1
+    if [[ -z "${DATABASE_URL:-}" ]]; then
+        echo "ERROR: PostgreSQL backend selected but DATABASE_URL is empty." >&2
+        exit 1
+    fi
+    # The Postgres regression modules isolate via TEST_DATABASE_URL; default it
+    # to the gate's database when unset (mirrors the CI postgres job).
+    export TEST_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL}}"
+fi
+
 STEP=0
 TOTAL=$((4 + RUN_LIVEWEEK))
 
 STEP=$((STEP + 1))
-echo "--> [${STEP}/${TOTAL}] Running Unit & Integration Test Suite (pytest)..."
-"${PYTEST}" "${ROOT_DIR}/tests/"
+if [[ "${IS_POSTGRES}" -eq 1 ]]; then
+    # The full suite is not yet Postgres-safe (issue #39): run the Postgres
+    # regression modules instead, mirroring the CI postgres job.
+    echo "--> [${STEP}/${TOTAL}] Running Postgres Regression Tests (pytest)..."
+    "${PYTEST}" "${ROOT_DIR}/tests/test_postgres_phase3.py" "${ROOT_DIR}/tests/test_postgres_phase4.py"
+else
+    echo "--> [${STEP}/${TOTAL}] Running Unit & Integration Test Suite (pytest)..."
+    "${PYTEST}" "${ROOT_DIR}/tests/"
+fi
 
 echo ""
 STEP=$((STEP + 1))
@@ -115,18 +147,14 @@ echo "--> [${STEP}/${TOTAL}] Running Chaos Simulation (tools/scenario_random.py,
 # (tools/scenario_random.py <seed>) for wider exploration.
 "${PYTHON}" "${ROOT_DIR}/tools/scenario_random.py" 42
 
-# liveweek targets PostgreSQL when the gate runs with DATABASE_URL set
-# (see AGENTS.md section 4). The flag default already honors
-# SHIFTWISE_LIVEWEEK_DATABASE_URL, so only forward an explicit DATABASE_URL.
-LIVEWEEK_ARGS=(--duration "${LIVEWEEK_SECONDS}")
-if [[ -n "${DATABASE_URL:-}" ]]; then
-    LIVEWEEK_ARGS+=(--database-url "${DATABASE_URL}")
-fi
-
 if [[ "${RUN_LIVEWEEK}" -eq 1 ]]; then
     echo ""
     STEP=$((STEP + 1))
     echo "--> [${STEP}/${TOTAL}] Running Live-Week Concurrency Gauntlet (tools/liveweek.py, ${LIVEWEEK_SECONDS}s)..."
+    LIVEWEEK_ARGS=(--duration "${LIVEWEEK_SECONDS}")
+    if [[ "${IS_POSTGRES}" -eq 1 ]]; then
+        LIVEWEEK_ARGS+=(--database-url "${DATABASE_URL}")
+    fi
     "${PYTHON}" "${ROOT_DIR}/tools/liveweek.py" "${LIVEWEEK_ARGS[@]}"
 else
     echo ""
