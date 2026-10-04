@@ -115,11 +115,19 @@ echo "--> [${STEP}/${TOTAL}] Running Chaos Simulation (tools/scenario_random.py,
 # (tools/scenario_random.py <seed>) for wider exploration.
 "${PYTHON}" "${ROOT_DIR}/tools/scenario_random.py" 42
 
+# liveweek targets PostgreSQL when the gate runs with DATABASE_URL set
+# (see AGENTS.md section 4). The flag default already honors
+# SHIFTWISE_LIVEWEEK_DATABASE_URL, so only forward an explicit DATABASE_URL.
+LIVEWEEK_ARGS=(--duration "${LIVEWEEK_SECONDS}")
+if [[ -n "${DATABASE_URL:-}" ]]; then
+    LIVEWEEK_ARGS+=(--database-url "${DATABASE_URL}")
+fi
+
 if [[ "${RUN_LIVEWEEK}" -eq 1 ]]; then
     echo ""
     STEP=$((STEP + 1))
     echo "--> [${STEP}/${TOTAL}] Running Live-Week Concurrency Gauntlet (tools/liveweek.py, ${LIVEWEEK_SECONDS}s)..."
-    "${PYTHON}" "${ROOT_DIR}/tools/liveweek.py" --duration "${LIVEWEEK_SECONDS}"
+    "${PYTHON}" "${ROOT_DIR}/tools/liveweek.py" "${LIVEWEEK_ARGS[@]}"
 else
     echo ""
     echo "--> SKIPPED: live-week concurrency gauntlet (--no-liveweek)."

@@ -39,6 +39,12 @@
     (`tools/scenario_random.py 42`, pinned seed) completes without error;
   - the live-week concurrency gauntlet (`tools/liveweek.py`) completes without harness error; its findings are recorded as artifacts in `tools/liveweek-artifacts/` (gitignored) for fixing agents — they are reports, not suite failures (`--strict` enforces them in CI). Duration is configurable via `--liveweek-seconds N` or `SHIFTWISE_LIVEWEEK_SECONDS`;
   - `docker compose config` validates.
+- PostgreSQL acceptance: `DATABASE_URL=<redacted> ./tools/run_all.sh` runs the
+  gate's app-facing steps against PostgreSQL. `run_all.sh` forwards `DATABASE_URL` to `liveweek.py
+  --database-url`; the scenario tools follow it through the app facade's engine selection. (The
+  `test_postgres_phase*.py` modules additionally honor `TEST_DATABASE_URL` for their own isolated schemas.)
+  Note: the full pytest suite is not yet Postgres-safe (issue #39) — without `DATABASE_URL`, every step runs
+  on isolated SQLite exactly as before.
 - Failure contract: the scenario steps (`gauntlet.py`, `scenario_random.py`) fail the gate on unhandled exceptions
   or failed assertions; their printed final audits (understaffing, over-cap, cross-house leaks) are informational.
   `tools/scenario_demo.py` is a human click-through demo, not a gate step — it leaves its database behind for
