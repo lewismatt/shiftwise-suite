@@ -16,7 +16,10 @@ import app as appmod
 from shiftwise.scheduler import debounce, engine
 
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not TEST_URL, reason="Set TEST_DATABASE_URL for PostgreSQL tests")
+pytestmark = [
+    pytest.mark.skipif(not TEST_URL, reason="Set TEST_DATABASE_URL for PostgreSQL tests"),
+    pytest.mark.pg_own_isolation,
+]
 
 
 @pytest.fixture
