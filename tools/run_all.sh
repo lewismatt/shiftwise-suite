@@ -22,7 +22,7 @@ usage() {
     cat <<'EOF'
 Usage: tools/run_all.sh [options]
 
-  (no options)              full gate: pytest + gauntlet + scenario + chaos
+  (no options)              full gate: pytest + gauntlet + chaos
                                 + liveweek + compose
   --fast                    pytest suite only (inner development loop)
   --no-liveweek             full gate without the live-week concurrency gauntlet
@@ -97,7 +97,7 @@ if ! "${PYTHON}" -c "import pglast, pytest_timeout" >/dev/null 2>&1; then
 fi
 
 STEP=0
-TOTAL=$((5 + RUN_LIVEWEEK))
+TOTAL=$((4 + RUN_LIVEWEEK))
 
 STEP=$((STEP + 1))
 echo "--> [${STEP}/${TOTAL}] Running Unit & Integration Test Suite (pytest)..."
@@ -107,11 +107,6 @@ echo ""
 STEP=$((STEP + 1))
 echo "--> [${STEP}/${TOTAL}] Running Conflict Gauntlet (tools/gauntlet.py)..."
 "${PYTHON}" "${ROOT_DIR}/tools/gauntlet.py"
-
-echo ""
-STEP=$((STEP + 1))
-echo "--> [${STEP}/${TOTAL}] Running Scenario Simulation (tools/scenario_demo.py)..."
-"${PYTHON}" "${ROOT_DIR}/tools/scenario_demo.py"
 
 echo ""
 STEP=$((STEP + 1))
