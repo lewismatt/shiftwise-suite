@@ -1,4 +1,5 @@
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -13,7 +14,7 @@ import app as appmod
 def test_calendar():
     _test_db = isolate_database(appmod)
     try:
-        WEEK = "2026-09-28"  # a Monday
+        WEEK = appmod.monday_of(appmod.date.today()).isoformat()
         DB = appmod.DB_PATH
         if DB.exists():
             DB.unlink()
@@ -52,15 +53,22 @@ def test_calendar():
         mine_count = html.count('class="cal-shift cal-mine"')
         assert mine_count == 1, f"Alex should see exactly 1 of their shifts, got {mine_count}"
         assert "scheduled" in html
-        assert "Sep 28" in html and "Oct 04" in html, "day labels should render"
+        monday = appmod.date.fromisoformat(WEEK)
+        sunday = monday + timedelta(days=6)
+        assert monday.strftime("%b %d") in html and sunday.strftime("%b %d") in html, (
+            "day labels should render"
+        )
         print("1. Employee calendar renders own week with correct assignment: OK")
 
         # --- 2. prev/next week navigation links present and work
-        assert "/calendar?week=2026-09-21" in html, "prev-week link missing"
-        assert "/calendar?week=2026-10-05" in html, "next-week link missing"
-        r2 = client.get("/calendar?week=2026-10-05")
+        prev_week = monday - timedelta(days=7)
+        next_week = monday + timedelta(days=7)
+        assert f"/calendar?week={prev_week.isoformat()}" in html, "prev-week link missing"
+        assert f"/calendar?week={next_week.isoformat()}" in html, "next-week link missing"
+        r2 = client.get(f"/calendar?week={next_week.isoformat()}")
         assert r2.status_code == 200
-        assert "Oct 05" in r2.data.decode() and 'class="cal-shift cal-mine"' not in r2.data.decode()
+        assert next_week.strftime("%b %d") in r2.data.decode()
+        assert 'class="cal-shift cal-mine"' not in r2.data.decode()
         print("2. Week navigation works, next week is empty: OK")
 
         # --- 3. invalid week param falls back to current week, not a crash
@@ -92,8 +100,8 @@ def test_calendar():
         print("6. Unassigned employee gets a clean empty calendar: OK")
 
         # --- 7. employees can switch between FOH and BOH schedule views
-        front_view = client.get("/calendar?week=2026-09-28&area=front")
-        back_view = client.get("/calendar?week=2026-09-28&area=back")
+        front_view = client.get(f"/calendar?week={WEEK}&area=front")
+        back_view = client.get(f"/calendar?week={WEEK}&area=back")
         assert front_view.status_code == back_view.status_code == 200
         assert "Back of house schedule" in back_view.data.decode()
         assert "Front of house schedule" in front_view.data.decode()
