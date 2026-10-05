@@ -1,7 +1,6 @@
 """Sign-in throttling and username-enumeration resistance."""
 
 import sys
-import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,14 +16,9 @@ from shiftwise.security import CsrfAwareTestClient
 
 class LoginThrottleTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="shiftwise-throttle-")
-        appmod.DB_PATH = Path(self.temporary.name) / "scheduler.db"
         appmod.init_db(seed_demo=True)
         appmod.app.test_client_class = CsrfAwareTestClient
         self.client = appmod.app.test_client()
-
-    def tearDown(self):
-        self.temporary.cleanup()
 
     def attempt(self, username, password):
         return self.client.post(

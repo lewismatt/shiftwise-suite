@@ -3,7 +3,7 @@ from datetime import date
 import app as appmod
 
 
-def test_manager_denial_reason_is_saved_and_sent_to_employee(isolated_db):
+def test_manager_denial_reason_is_saved_and_sent_to_employee():
     appmod.init_db(seed_demo=True)
     client = appmod.app.test_client()
     client.post("/login", data={"username": "alex", "password": "alex"})

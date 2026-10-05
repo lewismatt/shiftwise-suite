@@ -1,5 +1,4 @@
 import sys
-import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
@@ -13,14 +12,9 @@ import app as appmod
 
 class EmployeeAdminTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="shiftwise-employee-admin-")
-        appmod.DB_PATH = Path(self.temporary.name) / "scheduler.db"
         appmod.init_db(seed_demo=True)
         self.client = appmod.app.test_client()
         self.week = appmod.monday_of(date.today()).isoformat()
-
-    def tearDown(self):
-        self.temporary.cleanup()
 
     def login(self, username):
         self.client.get("/logout")

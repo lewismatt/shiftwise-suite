@@ -14,7 +14,7 @@ from tools import liveweek
 from tools.liveweek import Recorder, World, run_audit
 
 
-def test_hours_audit_distinguishes_manager_override_from_automatic_excess(isolated_db, tmp_path):
+def test_hours_audit_distinguishes_manager_override_from_automatic_excess(tmp_path):
     appmod.init_db(seed_demo=True)
     conn = appmod.db()
     uid = conn.execute("SELECT id FROM users WHERE role='employee' ORDER BY id").fetchone()[0]
@@ -41,7 +41,7 @@ def test_hours_audit_distinguishes_manager_override_from_automatic_excess(isolat
     assert next(i for i in world.rec.issues if i["category"] == "hours_cap")["severity"] == "HIGH"
 
 
-def test_manager_review_queue_excludes_employee_owned_invites(isolated_db, tmp_path):
+def test_manager_review_queue_excludes_employee_owned_invites(tmp_path):
     appmod.init_db(seed_demo=True)
     conn = appmod.db()
     users = [r[0] for r in conn.execute("SELECT id FROM users WHERE role='employee' ORDER BY id")]
@@ -61,7 +61,7 @@ def test_manager_review_queue_excludes_employee_owned_invites(isolated_db, tmp_p
 
 @pytest.mark.parametrize("new_sick_request", [False, True])
 def test_sick_swap_drill_ignores_history_but_detects_new_duplicates(
-    isolated_db, tmp_path, monkeypatch, new_sick_request
+    tmp_path, monkeypatch, new_sick_request
 ):
     appmod.init_db(seed_demo=True)
     conn = appmod.db()

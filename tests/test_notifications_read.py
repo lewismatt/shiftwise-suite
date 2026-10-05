@@ -1,11 +1,11 @@
-"""Dashboard reads and explicit notification acknowledgment on SQLite."""
+"""Dashboard reads and explicit notification acknowledgment."""
 
 from flask.testing import FlaskClient
 
 import app as appmod
 
 
-def test_dashboard_get_preserves_unread_and_post_marks_only_current_user(isolated_db):
+def test_dashboard_get_preserves_unread_and_post_marks_only_current_user():
     appmod.init_db(seed_demo=True)
     conn = appmod.db()
     users = [
@@ -36,7 +36,7 @@ def test_dashboard_get_preserves_unread_and_post_marks_only_current_user(isolate
     conn.close()
 
 
-def test_acknowledgment_requires_authentication_and_csrf(isolated_db):
+def test_acknowledgment_requires_authentication_and_csrf():
     appmod.init_db(seed_demo=True)
     client = FlaskClient(appmod.app)
     assert client.post("/notifications/read-all").status_code == 400

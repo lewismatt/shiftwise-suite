@@ -9,11 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import (
-    isolate_database,
-    postgres_engine_active,
-    truncate_postgres_tables,
-)
+from test_support import truncate_postgres_tables
 
 import app as appmod
 from shiftwise.security import use_csrf_aware_test_client
@@ -23,26 +19,10 @@ from shiftwise.security import use_csrf_aware_test_client
 use_csrf_aware_test_client(appmod.app)
 
 
-def pytest_collection_modifyitems(config, items):
-    """Skip SQLite-only tests when the suite runs against PostgreSQL."""
-    if not postgres_engine_active():
-        return
-    skip = pytest.mark.skip(reason="SQLite-only test; not applicable to PostgreSQL")
-    for item in items:
-        if item.get_closest_marker("sqlite_only"):
-            item.add_marker(skip)
-
-
-@pytest.fixture
-def isolated_db():
-    """Provides a fresh isolated database for testing."""
-    temp_dir = isolate_database(appmod)
-    yield appmod
-    temp_dir.cleanup()
-
-
 @pytest.fixture(autouse=True)
-def disable_scheduler_worker(monkeypatch):
+def disable_scheduler_worker(_postgres_test_isolation, monkeypatch):
+    # Resolve isolation before monkeypatch so database URL overrides are undone
+    # before the shared-table teardown runs.
     # Tests explicitly drive queued work; do not let a poller outlive a test DB.
     monkeypatch.setitem(appmod.app.config, "SCHEDULER_WORKER_ENABLED", False)
 
@@ -50,24 +30,17 @@ def disable_scheduler_worker(monkeypatch):
 @pytest.fixture(scope="session")
 def _postgres_schema_ready():
     """Create the shared PostgreSQL schema once so per-test TRUNCATE has tables."""
-    if postgres_engine_active():
-        appmod.init_db(seed_demo=True)
+    appmod.init_db(seed_demo=True)
     yield
 
 
 @pytest.fixture(autouse=True)
-def _postgres_test_isolation(request, _postgres_schema_ready):
-    """Reset shared PostgreSQL tables around each test.
+def _postgres_test_isolation(_postgres_schema_ready):
+    """Reset all shared PostgreSQL tables before and after each test.
 
-    SQLite tests get file-per-test isolation via ``isolate_database``; on a
-    shared PostgreSQL database that DB_PATH swap is a no-op, so every test
-    instead starts and ends with empty tables. Modules that own their
-    isolation (phase3 shared-table cleanup, phase4 throwaway schema) opt out
-    with ``@pytest.mark.pg_own_isolation``.
+    Set up before fixtures that monkeypatch the database URL so teardown runs
+    after they restore the shared database, including throwaway-schema tests.
     """
-    if not postgres_engine_active() or request.node.get_closest_marker("pg_own_isolation"):
-        yield
-        return
     _truncate_postgres()
     yield
     _truncate_postgres()

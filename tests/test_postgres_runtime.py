@@ -19,7 +19,7 @@ import pytest
             "postgresql://user:secret@127.0.0.1:1/unused",
             "SQLite support removed — configure PostgreSQL via DATABASE_URL",
         ),
-        (None, "sqlite:///scheduler.db", "DATABASE_URL must be a PostgreSQL URL"),
+        (None, "mysql://user:secret@127.0.0.1/scheduler", "DATABASE_URL must be a PostgreSQL URL"),
         (
             None,
             "postgresql://user:secret@127.0.0.1:1/unused?connect_timeout=1",

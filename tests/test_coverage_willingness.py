@@ -3,7 +3,7 @@ from datetime import date
 import app as appmod
 
 
-def test_employee_coverage_willingness_is_saved_and_honored(isolated_db):
+def test_employee_coverage_willingness_is_saved_and_honored():
     appmod.init_db(seed_demo=True)
     client = appmod.app.test_client()
     response = client.post("/login", data={"username": "alex", "password": "alex"})
@@ -57,7 +57,7 @@ def test_employee_coverage_willingness_is_saved_and_honored(isolated_db):
     assert b'type="checkbox" name="cover_' in text
 
 
-def test_preferred_shift_ranking_matches_cover_availability_format(isolated_db):
+def test_preferred_shift_ranking_matches_cover_availability_format():
     appmod.init_db(seed_demo=True)
     client = appmod.app.test_client()
     client.post("/login", data={"username": "alex", "password": "alex"})

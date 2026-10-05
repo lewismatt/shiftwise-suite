@@ -2,7 +2,6 @@
 
 import re
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,8 +22,6 @@ FORM_RE = re.compile(r"<form\b[^>]*>.*?</form>", re.S)
 
 class CsrfTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="shiftwise-csrf-")
-        appmod.DB_PATH = Path(self.temporary.name) / "scheduler.db"
         appmod.init_db(seed_demo=True)
         mock_seed.seed(appmod, force=True)
         appmod.run_scheduler(appmod.monday_of(appmod.date.today()).isoformat())
@@ -33,9 +30,6 @@ class CsrfTests(unittest.TestCase):
         # a bare client, so it has to supply the token itself.
         self.client = appmod.app.test_client()
         self.plain = FlaskClient(appmod.app, appmod.app.response_class)
-
-    def tearDown(self):
-        self.temporary.cleanup()
 
     def login(self, client, username):
         return client.post("/login", data={"username": username, "password": username})
