@@ -16,7 +16,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # SHIFTWISE_LIVEWEEK_SECONDS also overrides the live-week duration.
 #
 # DATABASE_URL=<postgres-url> (or SHIFTWISE_DB_ENGINE=postgres) runs the gate
-# against PostgreSQL: the pytest step runs the Postgres regression modules and
+# against PostgreSQL: the pytest step runs the full suite and
 # liveweek targets the given database (see AGENTS.md section 4).
 
 MODE="full"
@@ -109,21 +109,14 @@ if [[ "${EFFECTIVE_ENGINE}" == "postgres" || "${EFFECTIVE_ENGINE}" == "postgresq
         echo "ERROR: PostgreSQL backend selected but DATABASE_URL is empty." >&2
         exit 1
     fi
-    # The Postgres regression modules isolate via TEST_DATABASE_URL; default it
+    # PostgreSQL tests use TEST_DATABASE_URL for isolation; default it
     # to the gate's database when unset (mirrors the CI postgres job).
     export TEST_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL}}"
 fi
 
-# The pytest target depends on the backend: the full suite is not yet
-# Postgres-safe (issue #39), so Postgres mode runs the regression modules,
-# mirroring the CI postgres job.
-if [[ "${IS_POSTGRES}" -eq 1 ]]; then
-    PYTEST_TARGET=("${ROOT_DIR}/tests/test_postgres_phase3.py" "${ROOT_DIR}/tests/test_postgres_phase4.py")
-    PYTEST_LABEL="Postgres Regression Tests"
-else
-    PYTEST_TARGET=("${ROOT_DIR}/tests/")
-    PYTEST_LABEL="Unit & Integration Test Suite"
-fi
+# Run the full suite on the selected backend, including in fast mode.
+PYTEST_TARGET=("${ROOT_DIR}/tests/")
+PYTEST_LABEL="Unit & Integration Test Suite (${EFFECTIVE_ENGINE})"
 
 if [[ "${MODE}" == "fast" ]]; then
     echo "--> FAST MODE: ${PYTEST_LABEL} only."

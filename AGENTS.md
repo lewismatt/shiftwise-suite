@@ -42,7 +42,7 @@
 - PostgreSQL acceptance: `DATABASE_URL=<redacted> ./tools/run_all.sh` runs the
   whole gate against PostgreSQL. The backend is detected the same way the app detects it
   (`SHIFTWISE_DB_ENGINE` first, else inferred from `DATABASE_URL`); in Postgres mode the pytest step runs
-  the Postgres regression modules instead of the full suite (not yet Postgres-safe — issue #39),
+  the full suite in a single process with per-test PostgreSQL isolation,
   `TEST_DATABASE_URL` defaults to `DATABASE_URL`, and liveweek gets `--database-url`. Target a fresh
   database for a reproducible run. Without Postgres indicators, every step runs on isolated SQLite
   exactly as before.
@@ -56,9 +56,8 @@
 - Dev extras (`requirements-dev.txt`: `pytest-timeout`, `pglast`) are required for a fully green suite: without `pglast` the PostgreSQL DDL parser test skips, and `pytest.ini` caps each test at 180 s so a lock wait or dialect error cannot hang a run.
 - `tools/check_entrypoints.py` (run as step `[0]` of `tools/run_all.sh`) asserts the tracked shell entrypoints (`tools/run_all.sh`, `tools/clean_artifacts.sh`, `docker-entrypoint.sh`, `shiftwise-mock/sync.sh`) keep mode `100755` via `git ls-files -s`. It catches the regression class PR #18 shipped: a dropped executable bit silently breaks the documented `./tools/run_all.sh` while every test still passes.
 - `.github/workflows/ci.yml` runs the executable-bit guard plus a `postgres` job (live PostgreSQL 16
-  service; ruff, the Postgres regression test modules, gauntlet, and pinned-seed chaos run) on pushes to `master`
-  and on pull requests. The full pytest suite is NOT in CI: its per-test isolation is SQLite-file-based, so on one
-  shared Postgres database the tests pollute each other (see PR #38 body). It is not a required status check —
+  service; ruff, the full pytest suite in a single process, gauntlet, and pinned-seed chaos run) on pushes to `master`
+  and on pull requests. Tests isolate shared PostgreSQL state between cases. It is not a required status check —
   blocking merges needs branch protection, which needs repo admin.
 
 ## 5. Simulation Harness & Mock Roster Coupling

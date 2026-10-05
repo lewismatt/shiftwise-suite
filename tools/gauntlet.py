@@ -330,6 +330,10 @@ def run_gauntlet():
         follow_redirects=True,
     )
     assert b"Vacation requested" in r.data, "vacation request was not accepted"
+    # Force the synchronous rebuild explicitly: on SQLite the vacation route
+    # already rebuilt, but on Postgres the rebuild is debounced and would race
+    # the in-vacation holdings assertion below.
+    appmod.run_scheduler(WEEK)
     c = appmod.db()
     req = c.execute(
         "SELECT vacation_start, vacation_end FROM requests WHERE user_id=? AND kind='vacation' "
