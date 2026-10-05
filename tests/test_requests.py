@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import isolate_database
+from test_support import isolate_database, postgres_engine_active
 
 import app as appmod
 
@@ -61,6 +61,11 @@ def test_requests():
                 form[f"rank_{r['id']}"] = str(wanted.index(r["day"]) + 1)
             client.post("/pick", data=form, follow_redirects=True)
 
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds (queued for the worker); drive the
+            # queued rebuild explicitly so the auto-assign outcome is observable
+            # (SQLite request paths rebuild synchronously).
+            appmod.run_scheduler(week)
         conn = appmod.db()
         n_assigned = conn.execute("SELECT COUNT(*) c FROM assignments").fetchone()["c"]
         conn.close()
@@ -73,6 +78,9 @@ def test_requests():
         conn.close()
         r = client.post("/request/day_off", data={"day": "Mon"}, follow_redirects=True)
         assert b"Day off requested" in r.data
+        if postgres_engine_active():
+            # The day-off drop happens in the rebuild, which PostgreSQL debounces.
+            appmod.run_scheduler(week)
         conn = appmod.db()
         gone = conn.execute(
             "SELECT 1 FROM assignments a JOIN shifts s ON s.id=a.shift_id "
@@ -273,6 +281,9 @@ def test_requests():
             "vacation request should succeed, flash said: "
             + r.data.decode().split('class="flash">')[-1].split("</div>")[0]
         )
+        if postgres_engine_active():
+            # In-range shifts are dropped by the rebuild, which PostgreSQL debounces.
+            appmod.run_scheduler(week)
         conn = appmod.db()
         jordan_uid = conn.execute("SELECT id FROM users WHERE username='jordan'").fetchone()[0]
         vreq = conn.execute(
@@ -315,6 +326,10 @@ def test_requests():
         if j_shift:
             login("jordan", "jordan")
             r = client.post(f"/swap/{j_shift['id']}", follow_redirects=True)
+            if postgres_engine_active():
+                # Make the 8b rebuild assertions meaningful: the swap route only
+                # enqueues the rebuild on PostgreSQL.
+                appmod.run_scheduler(week)
             conn = appmod.db()
             jrow = conn.execute(
                 "SELECT status FROM assignments WHERE shift_id=? AND user_id=?",

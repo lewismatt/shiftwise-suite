@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -10,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import insert_id
+from test_support import insert_id, postgres_engine_active, truncate_postgres_tables
 
 import app as appmod
 
@@ -34,8 +35,22 @@ class ReviewFixes(unittest.TestCase):
         self.assertIn(b"Log out", response.data)
 
     def test_bootstrap_hashes_passwords_and_adds_employees(self):
-        with tempfile.TemporaryDirectory(prefix="shiftwise-bootstrap-") as path:
-            appmod.DB_PATH = Path(path) / "scheduler.db"
+        # The test needs a SECOND fresh database mid-test. SQLite swaps
+        # DB_PATH to a throwaway file; on PostgreSQL that swap is a no-op, so
+        # the shared database is truncated instead (the per-test isolation
+        # fixture re-seeds it for the next test).
+        if postgres_engine_active():
+            conn = appmod.db()
+            try:
+                truncate_postgres_tables(conn)
+            finally:
+                conn.close()
+            bootstrap_ctx = nullcontext()
+        else:
+            _bootstrap_tmp = tempfile.TemporaryDirectory(prefix="shiftwise-bootstrap-")
+            appmod.DB_PATH = Path(_bootstrap_tmp.name) / "scheduler.db"
+            bootstrap_ctx = _bootstrap_tmp
+        with bootstrap_ctx:
             with patch.dict(
                 os.environ, {"SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD": "private-manager-passphrase"}
             ):

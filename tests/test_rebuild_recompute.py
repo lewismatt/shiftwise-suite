@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import insert_id, isolate_database
+from test_support import insert_id, isolate_database, postgres_engine_active
 
 import app as appmod
 
@@ -44,6 +44,10 @@ def test_rebuild_recompute():
             for i, sid in enumerate([mon] + [x for x in _all_shifts if x != mon])
         }
         client.post("/pick", data=_full_form)
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds; drive the queued rebuild explicitly
+            # (SQLite request paths rebuild synchronously).
+            appmod.run_scheduler(WEEK)
         conn = appmod.db()
         who = conn.execute(
             "SELECT u.username FROM assignments a JOIN users u ON u.id=a.user_id "
@@ -63,6 +67,9 @@ def test_rebuild_recompute():
             for i, sid in enumerate([mon] + [x for x in _all_shifts if x != mon])
         }
         client.post("/pick", data=_full_form_alex)
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds; drive the queued rebuild explicitly.
+            appmod.run_scheduler(WEEK)
         conn = appmod.db()
         who = conn.execute(
             "SELECT u.username FROM assignments a JOIN users u ON u.id=a.user_id "
@@ -93,6 +100,9 @@ def test_rebuild_recompute():
             for i, sid in enumerate([mon] + [x for x in _all_shifts if x != mon])
         }
         client.post("/pick", data=_full_form_jordan)
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds; drive the queued rebuild explicitly.
+            appmod.run_scheduler(WEEK)
         conn = appmod.db()
         who = conn.execute(
             "SELECT u.username FROM assignments a JOIN users u ON u.id=a.user_id "
