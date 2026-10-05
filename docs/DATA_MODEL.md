@@ -1,5 +1,5 @@
 # Data Model & Storage Schema
-> Status: current · Last verified: 2026-09-29
+> Status: current · Last verified: 2026-10-04
 
 ## 1. Storage Configuration
 
