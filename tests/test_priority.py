@@ -5,211 +5,187 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import (
-    insert_id,
-    isolate_database,
-    postgres_engine_active,
-    truncate_postgres_tables,
-)
+from test_support import insert_id, truncate_postgres_tables
 
 import app as appmod
 
 
 def test_priority():
-    _test_db = isolate_database(appmod)
-    try:
-        WEEK = "2026-09-28"
+    WEEK = "2026-09-28"
 
-        def fresh(overrides=None):
-            if postgres_engine_active():
-                # PostgreSQL has no per-scenario database file: the DB_PATH
-                # unlink below is a no-op, and _seed_if_empty returns early
-                # while user rows from the previous scenario exist, so the
-                # "fresh" demo roster never materializes. Truncate the shared
-                # tables and re-seed instead. Also close the previous
-                # scenario's connection first: its idle open transaction would
-                # otherwise block the per-test TRUNCATE with LockNotAvailable.
-                if fresh.prev_conn is not None:
-                    fresh.prev_conn.close()
-                    fresh.prev_conn = None
-                trunc_conn = appmod.db()
-                try:
-                    truncate_postgres_tables(trunc_conn)
-                finally:
-                    trunc_conn.close()
-                appmod.init_db(seed_demo=True)
-            else:
-                DB = appmod.DB_PATH
-                if DB.exists():
-                    DB.unlink()
-                appmod.init_db(seed_demo=True)
-            conn = appmod.db()
-            conn.execute("DELETE FROM shifts")  # drop demo week, use controlled shifts
-            if overrides:
-                for uid, field, val in overrides:
-                    conn.execute(f"UPDATE users SET {field}=? WHERE username=?", (val, uid))
-            conn.commit()
-            if postgres_engine_active():
-                fresh.prev_conn = conn
-            return conn
-
-        fresh.prev_conn = None
-
-        def shift(conn, day, start, end, slots):
-            return insert_id(
-                conn,
-                "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
-                (WEEK, day, start, end, slots),
-            )
-
-        def pick(conn, username, sid, rank):
-            uid = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()[0]
-            conn.execute(
-                "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?) "
-                "ON CONFLICT (user_id, shift_id) DO UPDATE SET rank=excluded.rank",
-                (uid, sid, rank),
-            )
-
-        def assignments(conn):
-            rows = conn.execute(
-                "SELECT s.day, u.username FROM assignments a "
-                "JOIN shifts s ON s.id=a.shift_id JOIN users u ON u.id=a.user_id"
-            ).fetchall()
-            return rows
-
-        # --- 1. full-time beats part-time on a contested slot
-        conn = fresh()
-        mon = shift(conn, "Mon", "09:00", "17:00", 1)
-        for u in ("alex", "sam", "jordan"):
-            pick(conn, u, mon, 1)
+    def fresh(overrides=None):
+        # Close the previous scenario's transaction before resetting shared tables.
+        if fresh.prev_conn is not None:
+            fresh.prev_conn.close()
+            fresh.prev_conn = None
+        trunc_conn = appmod.db()
+        try:
+            truncate_postgres_tables(trunc_conn)
+        finally:
+            trunc_conn.close()
+        appmod.init_db(seed_demo=True)
+        conn = appmod.db()
+        conn.execute("DELETE FROM shifts")  # drop demo week, use controlled shifts
+        if overrides:
+            for uid, field, val in overrides:
+                conn.execute(f"UPDATE users SET {field}=? WHERE username=?", (val, uid))
         conn.commit()
-        appmod.run_scheduler(WEEK)
-        rows = assignments(conn)
-        assert [r["username"] for r in rows if r["day"] == "Mon"] == ["alex"], (
-            f"full-time should win contested slot, got {rows}"
-        )
-        print("1. FT beats PT on contested slot: OK (Alex on Mon)")
+        fresh.prev_conn = conn
+        return conn
 
-        # --- 2. seniority: earliest hire date wins within the same type
-        conn = fresh(
-            overrides=[
-                ("alex", "employment_type", "part_time"),
-                ("sam", "employment_type", "part_time"),
-                ("jordan", "employment_type", "part_time"),
-            ]
-        )
-        mon = shift(conn, "Mon", "09:00", "17:00", 1)
-        for u in ("alex", "sam", "jordan"):
-            pick(conn, u, mon, 1)
-        conn.commit()
-        appmod.run_scheduler(WEEK)
-        rows = assignments(conn)
-        assert [r["username"] for r in rows if r["day"] == "Mon"] == ["alex"], (
-            f"earliest hire should win among same type, got {rows}"
-        )
-        print(
-            "2. Seniority (earliest hire) wins within type: OK (Alex hired 2021 beats Sam 2023, Jordan 2024)"
+    fresh.prev_conn = None
+
+    def shift(conn, day, start, end, slots):
+        return insert_id(
+            conn,
+            "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
+            (WEEK, day, start, end, slots),
         )
 
-        # --- 3. same type, seniority flips when Alex is newest
-        conn = fresh(
-            overrides=[
-                ("alex", "employment_type", "part_time"),
-                ("sam", "employment_type", "part_time"),
-                ("jordan", "employment_type", "part_time"),
-                ("alex", "hired_on", "2026-01-01"),
-            ]
+    def pick(conn, username, sid, rank):
+        uid = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()[0]
+        conn.execute(
+            "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?) "
+            "ON CONFLICT (user_id, shift_id) DO UPDATE SET rank=excluded.rank",
+            (uid, sid, rank),
         )
-        mon = shift(conn, "Mon", "09:00", "17:00", 1)
-        for u in ("alex", "sam", "jordan"):
-            pick(conn, u, mon, 1)
-        conn.commit()
-        appmod.run_scheduler(WEEK)
-        rows = assignments(conn)
-        assert [r["username"] for r in rows if r["day"] == "Mon"] == ["sam"], (
-            f"newest hire should lose, got {rows}"
-        )
-        print("3. Newest hire loses when type is equal: OK (Sam hired 2023 beats Alex hired 2026)")
 
-        # --- 4. hours cap: part-time employee never scheduled past their cap
-        conn = fresh(overrides=[("sam", "weekly_hours", 20)])
-        m1 = shift(conn, "Mon", "09:00", "17:00", 3)  # 8h each, 3 slots
-        m2 = shift(conn, "Tue", "09:00", "17:00", 3)
-        m3 = shift(conn, "Wed", "09:00", "17:00", 3)
-        pick(conn, "sam", m1, 1)
-        pick(conn, "sam", m2, 2)
-        pick(conn, "sam", m3, 3)
-        conn.commit()
-        appmod.run_scheduler(WEEK)
-        rows = [r for r in assignments(conn) if r["username"] == "sam"]
-        assert len(rows) == 2, (
-            f"Sam (cap 20h, 8h shifts) should get exactly 2 shifts, got {len(rows)}"
-        )
-        conn2 = appmod.db()
-        caps = conn2.execute(
-            "SELECT message FROM notifications n JOIN users u ON u.id=n.user_id "
-            "WHERE u.username='sam' AND message LIKE '%cap%'"
+    def assignments(conn):
+        rows = conn.execute(
+            "SELECT s.day, u.username FROM assignments a "
+            "JOIN shifts s ON s.id=a.shift_id JOIN users u ON u.id=a.user_id"
         ).fetchall()
-        conn2.close()
-        assert caps, "expected an over-cap notification for Sam"
-        print("4. Hours cap respected: OK (Sam capped at 2 shifts, notified about the cap)")
+        return rows
 
-        # --- 5. fallback still works: contested pick falls to next-ranked choice
-        conn = fresh()
-        mon = shift(conn, "Mon", "09:00", "17:00", 1)
-        tue = shift(conn, "Tue", "09:00", "17:00", 1)
-        pick(conn, "alex", mon, 1)
-        pick(conn, "alex", tue, 2)
-        pick(conn, "sam", mon, 1)  # sam is PT, loses Mon, falls to nothing -> 'no room'
-        conn.commit()
-        appmod.run_scheduler(WEEK)
-        rows = assignments(conn)
-        got = {(r["username"], r["day"]) for r in rows}
-        assert ("alex", "Mon") in got and ("sam", "Mon") not in got, got
-        conn2 = appmod.db()
-        fallback = conn2.execute(
-            "SELECT COUNT(*) c FROM notifications n JOIN users u ON u.id=n.user_id "
-            "WHERE u.username='sam' AND kind='conflict'"
-        ).fetchone()["c"]
-        conn2.close()
-        assert fallback >= 1, "Sam should get a conflict notification"
-        print("5. Conflict fallback + notification: OK (Sam bumped off Mon, notified)")
+    # --- 1. full-time beats part-time on a contested slot
+    conn = fresh()
+    mon = shift(conn, "Mon", "09:00", "17:00", 1)
+    for u in ("alex", "sam", "jordan"):
+        pick(conn, u, mon, 1)
+    conn.commit()
+    appmod.run_scheduler(WEEK)
+    rows = assignments(conn)
+    assert [r["username"] for r in rows if r["day"] == "Mon"] == ["alex"], (
+        f"full-time should win contested slot, got {rows}"
+    )
+    print("1. FT beats PT on contested slot: OK (Alex on Mon)")
 
-        # --- 6. roster page updates type/hire/cap
-        conn = fresh()
-        client = appmod.app.test_client()
-        client.post("/login", data={"username": "manager", "password": "manager"})
-        r = client.post(
-            "/manager/roster",
-            data={
-                "type_2": "part_time",
-                "hired_2": "2025-05-05",
-                "cap_2": "20",
-                "type_3": "full_time",
-                "hired_3": "2022-02-02",
-                "cap_3": "40",
-                "type_4": "part_time",
-                "hired_4": "2024-11-20",
-                "cap_4": "35",
-            },
-            follow_redirects=True,
-        )
-        assert b"Roster updated" in r.data
-        check = conn.execute(
-            "SELECT username, employment_type, hired_on, weekly_hours FROM users ORDER BY id"
-        ).fetchall()
-        conn.close()
-        by_user = {r["username"]: r for r in check}
-        assert (
-            by_user["alex"]["employment_type"] == "part_time"
-            and by_user["alex"]["hired_on"] == "2025-05-05"
-        )
-        assert by_user["sam"]["employment_type"] == "full_time"
-        print("6. Roster page saves type/hire-date/cap: OK")
+    # --- 2. seniority: earliest hire date wins within the same type
+    conn = fresh(
+        overrides=[
+            ("alex", "employment_type", "part_time"),
+            ("sam", "employment_type", "part_time"),
+            ("jordan", "employment_type", "part_time"),
+        ]
+    )
+    mon = shift(conn, "Mon", "09:00", "17:00", 1)
+    for u in ("alex", "sam", "jordan"):
+        pick(conn, u, mon, 1)
+    conn.commit()
+    appmod.run_scheduler(WEEK)
+    rows = assignments(conn)
+    assert [r["username"] for r in rows if r["day"] == "Mon"] == ["alex"], (
+        f"earliest hire should win among same type, got {rows}"
+    )
+    print(
+        "2. Seniority (earliest hire) wins within type: OK (Alex hired 2021 beats Sam 2023, Jordan 2024)"
+    )
 
-        print("\nALL PRIORITY TESTS PASSED")
-    finally:
-        _test_db.cleanup()
+    # --- 3. same type, seniority flips when Alex is newest
+    conn = fresh(
+        overrides=[
+            ("alex", "employment_type", "part_time"),
+            ("sam", "employment_type", "part_time"),
+            ("jordan", "employment_type", "part_time"),
+            ("alex", "hired_on", "2026-01-01"),
+        ]
+    )
+    mon = shift(conn, "Mon", "09:00", "17:00", 1)
+    for u in ("alex", "sam", "jordan"):
+        pick(conn, u, mon, 1)
+    conn.commit()
+    appmod.run_scheduler(WEEK)
+    rows = assignments(conn)
+    assert [r["username"] for r in rows if r["day"] == "Mon"] == ["sam"], (
+        f"newest hire should lose, got {rows}"
+    )
+    print("3. Newest hire loses when type is equal: OK (Sam hired 2023 beats Alex hired 2026)")
+
+    # --- 4. hours cap: part-time employee never scheduled past their cap
+    conn = fresh(overrides=[("sam", "weekly_hours", 20)])
+    m1 = shift(conn, "Mon", "09:00", "17:00", 3)  # 8h each, 3 slots
+    m2 = shift(conn, "Tue", "09:00", "17:00", 3)
+    m3 = shift(conn, "Wed", "09:00", "17:00", 3)
+    pick(conn, "sam", m1, 1)
+    pick(conn, "sam", m2, 2)
+    pick(conn, "sam", m3, 3)
+    conn.commit()
+    appmod.run_scheduler(WEEK)
+    rows = [r for r in assignments(conn) if r["username"] == "sam"]
+    assert len(rows) == 2, f"Sam (cap 20h, 8h shifts) should get exactly 2 shifts, got {len(rows)}"
+    conn2 = appmod.db()
+    caps = conn2.execute(
+        "SELECT message FROM notifications n JOIN users u ON u.id=n.user_id "
+        "WHERE u.username='sam' AND message LIKE '%cap%'"
+    ).fetchall()
+    conn2.close()
+    assert caps, "expected an over-cap notification for Sam"
+    print("4. Hours cap respected: OK (Sam capped at 2 shifts, notified about the cap)")
+
+    # --- 5. fallback still works: contested pick falls to next-ranked choice
+    conn = fresh()
+    mon = shift(conn, "Mon", "09:00", "17:00", 1)
+    tue = shift(conn, "Tue", "09:00", "17:00", 1)
+    pick(conn, "alex", mon, 1)
+    pick(conn, "alex", tue, 2)
+    pick(conn, "sam", mon, 1)  # sam is PT, loses Mon, falls to nothing -> 'no room'
+    conn.commit()
+    appmod.run_scheduler(WEEK)
+    rows = assignments(conn)
+    got = {(r["username"], r["day"]) for r in rows}
+    assert ("alex", "Mon") in got and ("sam", "Mon") not in got, got
+    conn2 = appmod.db()
+    fallback = conn2.execute(
+        "SELECT COUNT(*) c FROM notifications n JOIN users u ON u.id=n.user_id "
+        "WHERE u.username='sam' AND kind='conflict'"
+    ).fetchone()["c"]
+    conn2.close()
+    assert fallback >= 1, "Sam should get a conflict notification"
+    print("5. Conflict fallback + notification: OK (Sam bumped off Mon, notified)")
+
+    # --- 6. roster page updates type/hire/cap
+    conn = fresh()
+    client = appmod.app.test_client()
+    client.post("/login", data={"username": "manager", "password": "manager"})
+    r = client.post(
+        "/manager/roster",
+        data={
+            "type_2": "part_time",
+            "hired_2": "2025-05-05",
+            "cap_2": "20",
+            "type_3": "full_time",
+            "hired_3": "2022-02-02",
+            "cap_3": "40",
+            "type_4": "part_time",
+            "hired_4": "2024-11-20",
+            "cap_4": "35",
+        },
+        follow_redirects=True,
+    )
+    assert b"Roster updated" in r.data
+    check = conn.execute(
+        "SELECT username, employment_type, hired_on, weekly_hours FROM users ORDER BY id"
+    ).fetchall()
+    conn.close()
+    by_user = {r["username"]: r for r in check}
+    assert (
+        by_user["alex"]["employment_type"] == "part_time"
+        and by_user["alex"]["hired_on"] == "2025-05-05"
+    )
+    assert by_user["sam"]["employment_type"] == "full_time"
+    print("6. Roster page saves type/hire-date/cap: OK")
+
+    print("\nALL PRIORITY TESTS PASSED")
 
 
 if __name__ == "__main__":

@@ -67,7 +67,7 @@ jobs:
           ruff format --check .
       - name: Full pytest suite on PostgreSQL
         # Shared database isolation requires sequential tests in one process.
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q -p no:xdist
       - name: Conflict gauntlet on PostgreSQL
         run: python tools/gauntlet.py
       - name: Scenario simulation on PostgreSQL

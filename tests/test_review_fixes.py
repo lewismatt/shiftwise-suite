@@ -1,8 +1,6 @@
 import os
 import sys
-import tempfile
 import unittest
-from contextlib import nullcontext
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -11,21 +9,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import insert_id, postgres_engine_active, truncate_postgres_tables
+from test_support import insert_id, truncate_postgres_tables
 
 import app as appmod
 
 
 class ReviewFixes(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="shiftwise-review-")
-        appmod.DB_PATH = Path(self.temporary.name) / "scheduler.db"
         appmod.init_db(seed_demo=True)
         self.client = appmod.app.test_client()
         self.week = appmod.monday_of(date.today()).isoformat()
-
-    def tearDown(self):
-        self.temporary.cleanup()
 
     def login(self, username):
         self.client.get("/logout")
@@ -35,75 +28,63 @@ class ReviewFixes(unittest.TestCase):
         self.assertIn(b"Log out", response.data)
 
     def test_bootstrap_hashes_passwords_and_adds_employees(self):
-        # The test needs a SECOND fresh database mid-test. SQLite swaps
-        # DB_PATH to a throwaway file; on PostgreSQL that swap is a no-op, so
-        # the shared database is truncated instead (the per-test isolation
-        # fixture only truncates; the next test's setUp re-seeds via init_db).
-        if postgres_engine_active():
-            conn = appmod.db()
-            try:
-                truncate_postgres_tables(conn)
-            finally:
-                conn.close()
-            bootstrap_ctx = nullcontext()
-        else:
-            _bootstrap_tmp = tempfile.TemporaryDirectory(prefix="shiftwise-bootstrap-")
-            appmod.DB_PATH = Path(_bootstrap_tmp.name) / "scheduler.db"
-            bootstrap_ctx = _bootstrap_tmp
-        with bootstrap_ctx:
-            with patch.dict(
-                os.environ, {"SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD": "private-manager-passphrase"}
-            ):
-                appmod.init_db()
-            conn = appmod.db()
-            users = conn.execute("SELECT username, password FROM users").fetchall()
-            self.assertEqual(len(users), 1)
-            self.assertEqual(users[0]["username"], "manager")
-            self.assertNotEqual(users[0]["password"], "private-manager-passphrase")
+        # Bootstrap needs an empty database after setUp has seeded the shared tables.
+        conn = appmod.db()
+        try:
+            truncate_postgres_tables(conn)
+        finally:
             conn.close()
-            self.client.post(
-                "/login", data={"username": "manager", "password": "private-manager-passphrase"}
-            )
-            response = self.client.post(
-                "/manager/roster/add",
-                data={
-                    "username": "newhire",
-                    "name": "New Hire",
-                    "password": "private-employee-passphrase",
-                    "employment_type": "part_time",
-                    "weekly_hours": "24",
-                    "hired_on": "2026-01-01",
-                },
-                follow_redirects=True,
-            )
-            self.assertIn(b"Employee added", response.data)
-            conn = appmod.db()
-            user = conn.execute("SELECT password FROM users WHERE username='newhire'").fetchone()
-            conn.close()
-            self.assertTrue(
-                appmod.check_password_hash(user["password"], "private-employee-passphrase")
-            )
-            changed = self.client.post(
-                "/account/password",
-                data={
-                    "old_password": "private-manager-passphrase",
-                    "new_password": "replacement-manager-passphrase",
-                },
-                follow_redirects=True,
-            )
-            self.assertIn(b"Password changed", changed.data)
-            old_login = self.client.post(
-                "/login",
-                data={"username": "manager", "password": "private-manager-passphrase"},
-                follow_redirects=True,
-            )
-            self.assertIn(b"Wrong username or password", old_login.data)
-            new_login = self.client.post(
-                "/login",
-                data={"username": "manager", "password": "replacement-manager-passphrase"},
-                follow_redirects=True,
-            )
-            self.assertIn(b"Log out", new_login.data)
+        with patch.dict(
+            os.environ, {"SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD": "private-manager-passphrase"}
+        ):
+            appmod.init_db()
+        conn = appmod.db()
+        users = conn.execute("SELECT username, password FROM users").fetchall()
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0]["username"], "manager")
+        self.assertNotEqual(users[0]["password"], "private-manager-passphrase")
+        conn.close()
+        self.client.post(
+            "/login", data={"username": "manager", "password": "private-manager-passphrase"}
+        )
+        response = self.client.post(
+            "/manager/roster/add",
+            data={
+                "username": "newhire",
+                "name": "New Hire",
+                "password": "private-employee-passphrase",
+                "employment_type": "part_time",
+                "weekly_hours": "24",
+                "hired_on": "2026-01-01",
+            },
+            follow_redirects=True,
+        )
+        self.assertIn(b"Employee added", response.data)
+        conn = appmod.db()
+        user = conn.execute("SELECT password FROM users WHERE username='newhire'").fetchone()
+        conn.close()
+        self.assertTrue(appmod.check_password_hash(user["password"], "private-employee-passphrase"))
+        changed = self.client.post(
+            "/account/password",
+            data={
+                "old_password": "private-manager-passphrase",
+                "new_password": "replacement-manager-passphrase",
+            },
+            follow_redirects=True,
+        )
+        self.assertIn(b"Password changed", changed.data)
+        old_login = self.client.post(
+            "/login",
+            data={"username": "manager", "password": "private-manager-passphrase"},
+            follow_redirects=True,
+        )
+        self.assertIn(b"Wrong username or password", old_login.data)
+        new_login = self.client.post(
+            "/login",
+            data={"username": "manager", "password": "replacement-manager-passphrase"},
+            follow_redirects=True,
+        )
+        self.assertIn(b"Log out", new_login.data)
 
     def test_day_off_survives_rebuild_and_denial_restores_eligibility(self):
         self.login("alex")
@@ -139,11 +120,8 @@ class ReviewFixes(unittest.TestCase):
         conn.close()
         self.login("manager")
         self.client.post(f"/manager/requests/{request_id}/deny")
-        if postgres_engine_active():
-            # PostgreSQL debounces rebuilds (queued for the worker); drive the
-            # queued rebuild explicitly so the post-deny assignment is
-            # observable (SQLite request paths rebuild synchronously).
-            appmod.run_scheduler(self.week)
+        # Drive the queued rebuild so the post-deny assignment is observable.
+        appmod.run_scheduler(self.week)
         conn = appmod.db()
         self.assertTrue(
             conn.execute(
@@ -176,11 +154,8 @@ class ReviewFixes(unittest.TestCase):
         for offset in (0, 3):
             day = (next_week + timedelta(days=offset)).isoformat()
             self.client.post("/request/vacation", data={"vac_start": day, "vac_end": day})
-        if postgres_engine_active():
-            # PostgreSQL debounces rebuilds (queued for the worker); drive the
-            # queued rebuild explicitly so the vacation exclusions are applied
-            # before the assertions (SQLite request paths rebuild synchronously).
-            appmod.run_scheduler(next_week.isoformat())
+        # Drive the queued rebuild so the vacation exclusions are applied.
+        appmod.run_scheduler(next_week.isoformat())
         conn = appmod.db()
         for shift_id in shifts:
             shift = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
@@ -269,11 +244,8 @@ class ReviewFixes(unittest.TestCase):
         conn.close()
         self.login("manager")
         self.client.post(f"/manager/requests/{request_id}/deny")
-        if postgres_engine_active():
-            # PostgreSQL debounces rebuilds (queued for the worker); drive the
-            # queued rebuild explicitly so the post-deny assignment is
-            # observable (SQLite request paths rebuild synchronously).
-            appmod.run_scheduler(next_week.isoformat())
+        # Drive the queued rebuild so the post-deny assignment is observable.
+        appmod.run_scheduler(next_week.isoformat())
         conn = appmod.db()
         shift = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
         self.assertNotIn(alex_id, appmod.unavailable_uids(conn, shift))
@@ -463,13 +435,9 @@ class ReviewFixes(unittest.TestCase):
         conn.close()
         self.login("alex")
         self.client.post(f"/swap/{shift_id}")
-        if postgres_engine_active():
-            # PostgreSQL debounces rebuilds (queued for the worker); drive the
-            # queued rebuild explicitly BEFORE the first notification count so
-            # both counts observe the rebuilt state (SQLite request paths
-            # rebuild synchronously). The second call below stays as the
-            # idempotence check.
-            appmod.run_scheduler(self.week)
+        # Drive the queued rebuild before counting notifications; the second
+        # scheduler call below checks idempotence.
+        appmod.run_scheduler(self.week)
         conn = appmod.db()
         status = conn.execute(
             "SELECT status FROM assignments WHERE shift_id=?", (shift_id,)

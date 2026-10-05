@@ -59,7 +59,7 @@ def test_legacy_urllib_patch_intercepts_delivery(monkeypatch, replace_module):
     assert notify_module._urllib is original
 
 
-def test_legacy_sender_patch_intercepts_roster_and_restores(isolated_db, monkeypatch):
+def test_legacy_sender_patch_intercepts_roster_and_restores(monkeypatch):
     appmod.init_db(seed_demo=True)
     monkeypatch.setitem(appmod.app.config, "SHIFTWISE_PUBLIC_URL", "https://staff.example.test")
     conn = appmod.db()

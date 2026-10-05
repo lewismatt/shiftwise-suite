@@ -18,12 +18,11 @@ from shiftwise.scheduler import debounce, engine
 TEST_URL = os.environ.get("TEST_DATABASE_URL")
 pytestmark = [
     pytest.mark.skipif(not TEST_URL, reason="Set TEST_DATABASE_URL for PostgreSQL tests"),
-    pytest.mark.pg_own_isolation,
 ]
 
 
 @pytest.fixture
-def pg(monkeypatch):
+def pg(_postgres_test_isolation, monkeypatch):
     schema = "phase4_" + uuid.uuid4().hex
     with psycopg.connect(TEST_URL, autocommit=True) as conn:
         conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))

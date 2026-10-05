@@ -1,6 +1,5 @@
 import os
 import sys
-import tempfile
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -15,8 +14,6 @@ import app as appmod
 
 class EmployeeScheduleLinkTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="shiftwise-links-")
-        appmod.DB_PATH = Path(self.temporary.name) / "scheduler.db"
         appmod.init_db(seed_demo=True)
         self.client = appmod.app.test_client()
         self.client.post("/login", data={"username": "manager", "password": "manager"})
@@ -24,7 +21,6 @@ class EmployeeScheduleLinkTests(unittest.TestCase):
 
     def tearDown(self):
         appmod.app.config.pop("SHIFTWISE_PUBLIC_URL", None)
-        self.temporary.cleanup()
 
     def employee_id(self, username="alex"):
         conn = appmod.db()

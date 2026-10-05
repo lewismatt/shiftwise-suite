@@ -2,9 +2,10 @@ from datetime import datetime
 
 from test_support import insert_id
 
+import app as appmod
 
-def test_employee_sees_manager_note_after_approval_or_denial(isolated_db):
-    appmod = isolated_db
+
+def test_employee_sees_manager_note_after_approval_or_denial():
     appmod.init_db(seed_demo=True)
     client = appmod.app.test_client()
     conn = appmod.db()

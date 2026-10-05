@@ -1,5 +1,4 @@
 from datetime import date
-from pathlib import Path
 from uuid import uuid4
 
 import app as appmod
@@ -11,11 +10,6 @@ def _login(client, username="alex"):
 
 
 def _init_demo(appmod):
-    db_path = Path(appmod.DB_PATH)
-    assert db_path.parent.name.startswith("shiftwise-test-")
-    for path in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
-        if path.exists():
-            path.unlink()
     appmod.init_db(seed_demo=True)
     conn = appmod.db()
     conn.execute("DELETE FROM login_attempts")
@@ -28,7 +22,7 @@ def _init_demo(appmod):
     conn.close()
 
 
-def test_clock_format_defaults_to_existing_24_hour_display(isolated_db):
+def test_clock_format_defaults_to_existing_24_hour_display():
     _init_demo(appmod)
     username = f"clocktest_{uuid4().hex}"
     conn = appmod.db()
@@ -56,7 +50,7 @@ def test_clock_format_defaults_to_existing_24_hour_display(isolated_db):
     assert b"1:05 PM" not in response.data
 
 
-def test_user_can_save_12_hour_clock_format(isolated_db):
+def test_user_can_save_12_hour_clock_format():
     _init_demo(appmod)
     conn = appmod.db()
     conn.execute(
@@ -85,7 +79,7 @@ def test_user_can_save_12_hour_clock_format(isolated_db):
     assert b"1:05 PM" in calendar.data
 
 
-def test_invalid_clock_format_does_not_change_saved_preference(isolated_db):
+def test_invalid_clock_format_does_not_change_saved_preference():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)
@@ -101,7 +95,7 @@ def test_invalid_clock_format_does_not_change_saved_preference(isolated_db):
     assert b"Choose either 12-hour or 24-hour time" in response.data
 
 
-def test_clock_formatter_handles_noon_midnight_and_afternoon(isolated_db):
+def test_clock_formatter_handles_noon_midnight_and_afternoon():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)
@@ -123,7 +117,7 @@ def test_clock_formatter_handles_noon_midnight_and_afternoon(isolated_db):
     assert format_clock("not-a-time", "12h") == "not-a-time"
 
 
-def test_settings_are_available_from_dashboard_navigation(isolated_db):
+def test_settings_are_available_from_dashboard_navigation():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)
@@ -135,7 +129,7 @@ def test_settings_are_available_from_dashboard_navigation(isolated_db):
     assert b"12-hour" in response.data and b"24-hour" in response.data
 
 
-def test_general_settings_page_contains_account_controls(isolated_db):
+def test_general_settings_page_contains_account_controls():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)
@@ -147,7 +141,7 @@ def test_general_settings_page_contains_account_controls(isolated_db):
         assert label in response.data
 
 
-def test_user_can_update_profile_from_general_settings(isolated_db):
+def test_user_can_update_profile_from_general_settings():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)
@@ -187,7 +181,7 @@ def test_user_can_update_profile_from_general_settings(isolated_db):
     )
 
 
-def test_profile_rejects_duplicate_username_and_invalid_email(isolated_db):
+def test_profile_rejects_duplicate_username_and_invalid_email():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)
@@ -221,7 +215,7 @@ def test_profile_rejects_duplicate_username_and_invalid_email(isolated_db):
     assert tuple(row) == ("Alex Rivera", "alex", None)
 
 
-def test_profile_can_clear_optional_email(isolated_db):
+def test_profile_can_clear_optional_email():
     _init_demo(appmod)
     conn = appmod.db()
     conn.execute("UPDATE users SET email='alex@example.test' WHERE username='alex'")
@@ -248,7 +242,7 @@ def test_profile_can_clear_optional_email(isolated_db):
     assert email is None
 
 
-def test_user_can_change_password_from_general_settings(isolated_db):
+def test_user_can_change_password_from_general_settings():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)
@@ -286,7 +280,7 @@ def test_user_can_change_password_from_general_settings(isolated_db):
     )
 
 
-def test_password_change_rejects_wrong_current_and_short_new_password(isolated_db):
+def test_password_change_rejects_wrong_current_and_short_new_password():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)
@@ -320,7 +314,7 @@ def test_password_change_rejects_wrong_current_and_short_new_password(isolated_d
     assert appmod.check_password_hash(password, "alex")
 
 
-def test_settings_is_last_in_desktop_and_mobile_navigation(isolated_db):
+def test_settings_is_last_in_desktop_and_mobile_navigation():
     _init_demo(appmod)
     client = appmod.app.test_client()
     _login(client)

@@ -13,18 +13,12 @@ if str(TESTS_DIR) not in sys.path:
 from datetime import date
 
 import pytest
-from test_support import isolate_database
 
 import app as appmod
 import mock_seed
 
 
 def test_mock_smoke():
-    _test_db = isolate_database(appmod)
-
-    DB = appmod.DB_PATH
-    if DB.exists():
-        DB.unlink()
     appmod.init_db(seed_demo=True)
     mock_seed.seed(appmod, force=True)
 
@@ -86,11 +80,9 @@ def test_mock_smoke():
     assert not cross, f"cross-house leak: {[r['username'] for r in cross]}"
     assert on_front == ["maria"], f"FOH Mon opening got {on_front}"
     assert on_back == ["morgan"], f"BOH Mon opening got {on_back}"
-    _test_db.cleanup()
 
 
 def test_seeded_demo_has_staggered_shifts_and_peak_staffing():
-    _test_db = isolate_database(appmod)
     appmod.init_db(seed_demo=True)
     mock_seed.seed(appmod, force=True)
     conn = appmod.db()
@@ -137,11 +129,9 @@ def test_seeded_demo_has_staggered_shifts_and_peak_staffing():
             ]
             assert ranks == list(range(1, 22)), (employee["username"], ranks)
     conn.close()
-    _test_db.cleanup()
 
 
 def test_seeded_week_fills_peak_and_nonpeak_shifts_without_rule_violations():
-    _test_db = isolate_database(appmod)
     appmod.init_db(seed_demo=True)
     mock_seed.seed(appmod, force=True)
     week = appmod.monday_of(date.today()).isoformat()
@@ -196,12 +186,10 @@ def test_seeded_week_fills_peak_and_nonpeak_shifts_without_rule_violations():
     nonpeak_slots = sum(s["slots"] for s in shifts if s["day"] not in ("Thu", "Fri", "Sat"))
     assert peak_slots > nonpeak_slots
     conn.close()
-    _test_db.cleanup()
 
 
 def test_seed_refuses_to_wipe_nonempty_db_without_force():
     """R6 guard: seed() must raise on a non-empty DB unless force=True."""
-    _test_db = isolate_database(appmod)
     appmod.init_db(seed_demo=True)  # leaves a non-empty users table
 
     with pytest.raises(RuntimeError, match="force=True"):
@@ -215,12 +203,10 @@ def test_seed_refuses_to_wipe_nonempty_db_without_force():
     # ...and an explicit force=True still wipes and reseeds.
     n, d, p = mock_seed.seed(appmod, force=True)
     assert (n, d, p) == (14, 7, 14 * 21)
-    _test_db.cleanup()
 
 
 def test_seed_on_empty_db_needs_no_force():
     """The guard passes silently when the users table is empty."""
-    _test_db = isolate_database(appmod)
     appmod.init_db(seed_demo=True)
     conn = appmod.db()
     conn.execute("DELETE FROM users")
@@ -228,7 +214,6 @@ def test_seed_on_empty_db_needs_no_force():
     conn.close()
     n, d, p = mock_seed.seed(appmod)
     assert (n, d, p) == (14, 7, 14 * 21)
-    _test_db.cleanup()
 
 
 if __name__ == "__main__":

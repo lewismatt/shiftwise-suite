@@ -51,12 +51,11 @@ pytestmark = [
         not _is_postgres_available(),
         reason="Live PostgreSQL server not reachable at " + POSTGRES_TEST_URL,
     ),
-    pytest.mark.pg_own_isolation,
 ]
 
 
 @pytest.fixture(autouse=True)
-def postgres_env(monkeypatch):
+def postgres_env(_postgres_test_isolation, monkeypatch):
     """Point application to the live test PostgreSQL database for each test."""
     monkeypatch.setenv("SHIFTWISE_DB_ENGINE", "postgres")
     monkeypatch.setenv("DATABASE_URL", POSTGRES_TEST_URL)

@@ -39,7 +39,7 @@ def _login(client, username):
     assert response.status_code == 302
 
 
-def test_employee_can_request_and_accept_an_in_house_shift_swap(isolated_db):
+def test_employee_can_request_and_accept_an_in_house_shift_swap():
     users, (alex_shift, sam_shift) = _setup_swap_pair()
     client = appmod.app.test_client()
     _login(client, "alex")
@@ -96,7 +96,7 @@ def test_employee_can_request_and_accept_an_in_house_shift_swap(isolated_db):
     assert "Accepted" in request_row["reason"]
 
 
-def test_swap_request_is_confined_to_target_employee_and_records_rejection_reason(isolated_db):
+def test_swap_request_is_confined_to_target_employee_and_records_rejection_reason():
     users, (alex_shift, sam_shift) = _setup_swap_pair()
     alex = appmod.app.test_client()
     _login(alex, "alex")
@@ -155,7 +155,7 @@ def test_swap_request_is_confined_to_target_employee_and_records_rejection_reaso
     assert request_row["reason"] == "I need that shift."
 
 
-def test_pending_swap_invitation_survives_a_scheduler_rebuild(isolated_db):
+def test_pending_swap_invitation_survives_a_scheduler_rebuild():
     users, (alex_shift, sam_shift) = _setup_swap_pair()
     week = appmod.monday_of(date.today()).isoformat()
     # The demo seed fills the same week with a full slate of shifts; drop them so
@@ -239,7 +239,7 @@ def test_pending_swap_invitation_survives_a_scheduler_rebuild(isolated_db):
     assert request_row["status"] == "approved_ok"
 
 
-def test_declined_swap_invitation_returns_the_shift_to_the_requester(isolated_db):
+def test_declined_swap_invitation_returns_the_shift_to_the_requester():
     users, (alex_shift, sam_shift) = _setup_swap_pair()
     alex = appmod.app.test_client()
     _login(alex, "alex")
@@ -280,7 +280,7 @@ def test_declined_swap_invitation_returns_the_shift_to_the_requester(isolated_db
     assert source["status"] == "confirmed"
 
 
-def test_manager_placed_shifts_cannot_be_involved_in_employee_swaps(isolated_db):
+def test_manager_placed_shifts_cannot_be_involved_in_employee_swaps():
     users, (alex_shift, sam_shift) = _setup_swap_pair()
     week = appmod.monday_of(date.today()).isoformat()
     conn = appmod.db()
