@@ -8,6 +8,7 @@ import threading
 import zlib
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
+from urllib.parse import quote
 
 from psycopg import ProgrammingError
 from psycopg.conninfo import conninfo_to_dict
@@ -192,6 +193,50 @@ _postgres_pool_url = None
 _postgres_pool_lock = threading.Lock()
 
 
+def _read_secret_file(path):
+    """Read a Docker secret file, dropping one trailing newline.
+
+    Secret files conventionally end with a newline that is not part of
+    the secret. Raises RuntimeError when the file cannot be read or holds
+    no usable value, so a mis-mounted secret fails fast at startup.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = handle.read()
+    except OSError as exc:
+        raise RuntimeError(f"POSTGRES_PASSWORD_FILE points at an unreadable file: {path}") from exc
+    if value.endswith("\r\n"):
+        value = value[:-2]
+    elif value.endswith("\n"):
+        value = value[:-1]
+    if not value:
+        raise RuntimeError(f"POSTGRES_PASSWORD_FILE is empty: {path}")
+    return value
+
+
+def _resolve_database_url():
+    """Return the PostgreSQL connection URL for this process.
+
+    When POSTGRES_PASSWORD_FILE is set (the docker-compose.secrets.yml
+    override), the password is read from that file and the URL is
+    assembled from POSTGRES_USER / POSTGRES_DB, so the secret value never
+    appears in the process environment. Otherwise DATABASE_URL is used
+    verbatim.
+    """
+    password_file = os.environ.get("POSTGRES_PASSWORD_FILE")
+    if password_file:
+        password = _read_secret_file(password_file)
+        user = os.environ.get("POSTGRES_USER", "shiftwise")
+        database = os.environ.get("POSTGRES_DB", "shiftwise")
+        return (
+            "postgresql://"
+            f"{quote(user, safe='')}:{quote(password, safe='')}"
+            "@postgres:5432/"
+            f"{quote(database, safe='')}"
+        )
+    return os.environ.get("DATABASE_URL", "").strip()
+
+
 def _database_engine():
     """Require PostgreSQL connection information; never fall back to a local database."""
     configured = os.environ.get("SHIFTWISE_DB_ENGINE")
@@ -201,7 +246,7 @@ def _database_engine():
             raise RuntimeError("SQLite support removed — configure PostgreSQL via DATABASE_URL")
         if engine not in ("postgres", "postgresql"):
             raise RuntimeError("SHIFTWISE_DB_ENGINE must be postgres or postgresql")
-    database_url = os.environ.get("DATABASE_URL", "").strip()
+    database_url = _resolve_database_url()
     if not database_url:
         raise RuntimeError(
             "PostgreSQL is required. Set DATABASE_URL to "
@@ -497,7 +542,7 @@ atexit.register(_close_postgres_pool)
 def db():
     """Lease a PostgreSQL connection from the application pool."""
     _database_engine()
-    pool = _postgres_pool_for(os.environ["DATABASE_URL"])
+    pool = _postgres_pool_for(_resolve_database_url())
     return _PostgresConnection(pool, pool.getconn())
 
 

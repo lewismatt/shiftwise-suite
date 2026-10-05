@@ -94,6 +94,37 @@ POSTGRES_PASSWORD=change-me-in-production
 
 ---
 
+### 3.1. Docker Secrets for the PostgreSQL Password (recommended)
+
+Instead of putting `POSTGRES_PASSWORD` in `.env` (where it is visible in
+`docker compose config` output and the container environment), keep it in a
+Docker secret:
+
+```sh
+mkdir -p secrets
+printf '%s' 'your-strong-password-here' > secrets/postgres_password
+chmod 600 secrets/postgres_password
+```
+
+Then layer the secrets override over the base compose file for every
+`docker compose` invocation:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.secrets.yml config
+docker compose -f docker-compose.yml -f docker-compose.secrets.yml up -d --build
+```
+
+The `postgres` service reads the password via the official image's
+`POSTGRES_PASSWORD_FILE` mechanism, and the app service reads the same secret
+at startup (`POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password`,
+see `shiftwise/db.py`), assembling its `DATABASE_URL` from `POSTGRES_USER` /
+`POSTGRES_DB`. The secret value never appears in the environment. When the
+secret is in use it takes precedence over `DATABASE_URL`; secrets mode targets
+the bundled postgres service. The `secrets/` directory is gitignored — the
+password file is never committed.
+
+---
+
 ## 4. Launching the Stack
 
 1. **Validate Configuration:**
