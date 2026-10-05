@@ -1,4 +1,4 @@
-"""PostgreSQL schema parsing, initialization, and transaction regressions.
+"""PostgreSQL schema parsing, initialization, transaction, and route regressions.
 
 Live server regressions are in test_postgres_phase3.py and test_postgres_phase4.py.
 """
@@ -6,9 +6,15 @@ Live server regressions are in test_postgres_phase3.py and test_postgres_phase4.
 import importlib
 
 import pytest
+from flask import session
+
+import app as appmod
 
 sdb = importlib.import_module("shiftwise.db")
 mock_seed = importlib.import_module("mock_seed")
+manager_routes = importlib.import_module("shiftwise.routes.manager")
+roster_routes = importlib.import_module("shiftwise.routes.roster")
+auth_mod = importlib.import_module("shiftwise.auth")
 
 
 # ---------------------------------------------------------------------------
@@ -86,12 +92,9 @@ class _RecordingConn:
         self.events = []  # ordered event log ("execute", "commit", ...)
         self.committed = False
         self.closed = False
-        self.in_transaction = False
         self._handler = handler or (lambda sql, params: [])
 
     def execute(self, sql, params=()):
-        if sql == "BEGIN IMMEDIATE":
-            self.in_transaction = True
         self.statements.append((sql, params))
         self.events.append("execute")
         return _Rows(self._handler(sql, params))
@@ -180,3 +183,82 @@ def test_init_db_postgres_rolls_back_and_returns_lease_on_ddl_failure(monkeypatc
         sdb.init_db()
     assert "rollback" in conn.events
     assert conn.closed
+
+
+# ---------------------------------------------------------------------------
+# Delete routes: preserve history ordering and rely on database cascades
+# ---------------------------------------------------------------------------
+
+
+def _auth_handler(sql, params):
+    if sql.startswith("SELECT * FROM users WHERE id="):
+        return [{"id": 1, "role": "manager"}]
+    return []
+
+
+def _login_and_call(monkeypatch, routes_mod, route_fn, path, form=None, handler=None):
+    conn = _RecordingConn(handler=handler or _auth_handler)
+    monkeypatch.setattr(routes_mod, "db", lambda: conn)
+    monkeypatch.setattr(auth_mod, "db", lambda: conn)
+    monkeypatch.setattr(routes_mod, "run_scheduler", lambda week: None)
+    with appmod.app.test_request_context(path, method="POST", data=form or {}):
+        session["uid"] = 1
+        session["role"] = "manager"
+        response = route_fn()
+    return conn, response
+
+
+def test_delete_shift_postgres_relies_on_db_cascade(monkeypatch):
+    def handler(sql, params):
+        if sql.startswith("SELECT week_start FROM shifts"):
+            return [{"week_start": "2026-09-28"}]
+        return _auth_handler(sql, params)
+
+    conn, response = _login_and_call(
+        monkeypatch,
+        manager_routes,
+        lambda: manager_routes.delete_shift(9),
+        "/manager/shift/delete/9",
+        handler=handler,
+    )
+    sqls = [sql for sql, _ in conn.statements]
+    supersede = next(
+        index for index, sql in enumerate(sqls) if sql.startswith("UPDATE requests SET status=")
+    )
+    delete = next(
+        index for index, sql in enumerate(sqls) if sql.startswith("DELETE FROM shifts WHERE id=?")
+    )
+    assert "status='superseded'" in sqls[supersede]
+    assert conn.statements[supersede][1] == (9, 9)
+    assert conn.statements[delete][1] == (9,)
+    assert supersede < delete
+    for table in ("picks", "coverage_preferences", "assignments", "requests", "notifications"):
+        assert not any(sql.startswith(f"DELETE FROM {table} ") for sql in sqls), table
+    assert response.status_code == 302
+    assert conn.committed and conn.closed
+
+
+def test_delete_employee_postgres_relies_on_db_cascade(monkeypatch):
+    def handler(sql, params):
+        if sql.startswith("SELECT id FROM users WHERE id=?"):
+            return [{"id": 5}]
+        return _auth_handler(sql, params)
+
+    conn, response = _login_and_call(
+        monkeypatch,
+        roster_routes,
+        lambda: roster_routes.delete_employee(5),
+        "/manager/roster/5/delete",
+        form={"confirm": "yes"},
+        handler=handler,
+    )
+    sqls = [sql for sql, _ in conn.statements]
+    for table in ("assignments", "picks", "coverage_preferences", "requests", "notifications"):
+        assert not any(sql.startswith(f"DELETE FROM {table} WHERE user_id=?") for sql in sqls)
+    cancel = sqls.index("DELETE FROM requests WHERE target_user_id=?")
+    delete = sqls.index("DELETE FROM users WHERE id=? AND role='employee'")
+    assert cancel < delete
+    assert conn.statements[cancel][1] == (5,)
+    assert conn.statements[delete][1] == (5,)
+    assert response.status_code == 302
+    assert conn.committed and conn.closed
