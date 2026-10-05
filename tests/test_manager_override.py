@@ -13,7 +13,7 @@ import app as appmod
 def test_manager_override():
     _test_db = isolate_database(appmod)
     try:
-        WEEK = "2026-09-28"
+        WEEK = appmod.monday_of(appmod.date.today()).isoformat()
 
         def fresh():
             if appmod.DB_PATH.exists():

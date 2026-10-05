@@ -1,4 +1,5 @@
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -13,7 +14,7 @@ import app as appmod
 def test_conflicts():
     _test_db = isolate_database(appmod)
     try:
-        WEEK = "2026-09-28"
+        WEEK = appmod.monday_of(appmod.date.today()).isoformat()
         DB = appmod.DB_PATH
         if DB.exists():
             DB.unlink()
@@ -65,7 +66,8 @@ def test_conflicts():
         print("1. Conflict detected; BOH pick excluded; claimants sorted FT-first: OK")
 
         # --- 2. week navigation present
-        assert "/manager/conflicts?week=2026-09-21" in html
+        prev_week = appmod.date.fromisoformat(WEEK) - timedelta(days=7)
+        assert f"/manager/conflicts?week={prev_week.isoformat()}" in html
         print("2. Week navigation on conflicts page: OK")
 
         # --- 3. MANUAL ASSIGN REMOVED (review-only manager): the assign endpoint

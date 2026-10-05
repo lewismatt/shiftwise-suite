@@ -13,7 +13,7 @@ import app as appmod
 def test_rebuild_recompute():
     _test_db = isolate_database(appmod)
     try:
-        WEEK = "2026-09-28"
+        WEEK = appmod.monday_of(appmod.date.today()).isoformat()
         DB = appmod.DB_PATH
         if DB.exists():
             DB.unlink()

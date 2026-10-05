@@ -4,16 +4,10 @@ name: CI
 #   verify   -- dependency-free guard: tracked shell entrypoints keep
 #               their executable bit (./tools/check_entrypoints.py).
 #   postgres -- live PostgreSQL 16 acceptance (partially delivers Phase 5
-#               "CI Pipeline Integration"): ruff, the Postgres regression
-#               test modules, and the quick scenario tools, all against a
-#               pg:16 service.
-#               The full pytest suite stays SQLite-only for now: its
-#               per-test isolation is file-based (isolated_db swaps DB_PATH),
-#               so on one shared Postgres database the tests pollute each
-#               other (a trial full-suite run failed 74 tests via data
-#               pollution, lastrowid use, lock pile-up and pool exhaustion).
-#               Making the whole suite Postgres-safe is follow-up work,
-#               tracked in issue #39. The heavy liveweek gauntlet stays manual.
+#               "CI Pipeline Integration"): ruff, the full pytest suite,
+#               and the quick scenario tools against a pg:16 service.
+#               Tests isolate shared PostgreSQL state and run in one process.
+#               The heavy liveweek gauntlet stays manual.
 # This is not a required status check: blocking merges needs branch protection,
 # which needs repo admin.
 
@@ -71,10 +65,9 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-      - name: Postgres regression tests
-        # phase4 uses a throwaway schema per test; phase3 drives the shared
-        # public schema and is safe because the CI steps run sequentially.
-        run: python -m pytest tests/test_postgres_phase3.py tests/test_postgres_phase4.py -q
+      - name: Full pytest suite on PostgreSQL
+        # Shared database isolation requires sequential tests in one process.
+        run: python -m pytest tests/ -q
       - name: Conflict gauntlet on PostgreSQL
         run: python tools/gauntlet.py
       - name: Scenario simulation on PostgreSQL
