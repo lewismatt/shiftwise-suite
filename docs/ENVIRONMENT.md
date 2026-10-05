@@ -9,7 +9,6 @@ All ShiftWise configuration is driven through environment variables prefixed wit
 |---|---|---|---|---|
 | `SHIFTWISE_SECRET_KEY` | String | *Ephemeral (Generated)* | `app.py`, `docker-entrypoint.sh` | Cryptographic secret key used to sign session cookies. **Must be fixed and persistent** in production (32-byte hex); an ephemeral key logs a warning and invalidates all user logins on restart. |
 | `SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD` | String | *None* | `app.py`, `docker-entrypoint.sh` | Password used to create the initial `manager` account on a fresh database, or upgrade legacy plain-text `manager` passwords. Must be at least 12 characters. |
-| `SHIFTWISE_DB_PATH` | Path | `scheduler.db` | `app.py`, `Dockerfile`, `docker-compose.yml` | Filesystem path to the SQLite database. In Docker deployments, defaults to `/data/scheduler.db`. |
 | `SHIFTWISE_HOST` | String | `127.0.0.1` | `app.py` | Bind interface for the Flask development server. Defaults to loopback (`127.0.0.1`); set to `0.0.0.0` for LAN access. |
 | `SHIFTWISE_PORT` | Integer | `5000` | `app.py`, `Dockerfile` | HTTP listening port for the application server. (Mock demo defaults to `5001`). |
 | `SHIFTWISE_BEHIND_PROXY` | Boolean | `""` (False) | `app.py` | When set to `1`, `true`, or `yes`, wraps the WSGI application with Werkzeug's `ProxyFix` middleware to trust `X-Forwarded-*` headers from Caddy or Nginx. |
@@ -23,8 +22,8 @@ All ShiftWise configuration is driven through environment variables prefixed wit
 
 | Variable | Type | Default Value | Used In | Description & Recommendations |
 |---|---|---|---|---|
-| `DATABASE_URL` | URL | *(compose default: bundled postgres; otherwise unset)* | `shiftwise/db.py`, `docker-compose.yml` | Selects the database backend. A `postgresql://` URL selects PostgreSQL; unset or empty selects SQLite. In the compose stack it defaults to the bundled `postgres` service — override in `.env` to use an external database, or set empty for SQLite. |
-| `SHIFTWISE_DB_ENGINE` | String | *Auto-detected* | `shiftwise/db.py` | Explicit backend override: `sqlite` or `postgres`/`postgresql`. Rarely needed — the engine is normally detected from `DATABASE_URL`. |
+| `DATABASE_URL` | Connection string | *(compose default: bundled postgres; otherwise required)* | `shiftwise/db.py`, `docker-compose.yml` | Required PostgreSQL URL (`postgresql://` or `postgres://`) or libpq connection string. Startup validates configuration and connectivity before serving requests. Empty, invalid, or unreachable values stop startup; Compose assembles its default from `POSTGRES_*`. |
+| `SHIFTWISE_DB_ENGINE` | String | `postgres` | `shiftwise/db.py` | Optional explicit selection: `postgres` or `postgresql`. `sqlite` errors with "SQLite support removed — configure PostgreSQL via DATABASE_URL". |
 | `POSTGRES_DB` | String | `shiftwise` | `docker-compose.yml` | Database name created by the bundled postgres service. If changed, update `DATABASE_URL` to match. |
 | `POSTGRES_USER` | String | `shiftwise` | `docker-compose.yml` | Database user for the bundled postgres service. If changed, update `DATABASE_URL` to match. |
 | `POSTGRES_PASSWORD` | String | `shiftwise` | `docker-compose.yml` | Database password for the bundled postgres service. **Change this in `.env` for any non-local deployment**; the default is a development convenience only. If changed, update `DATABASE_URL` to match. |
@@ -57,4 +56,6 @@ All ShiftWise configuration is driven through environment variables prefixed wit
 
 | Variable | Type | Default Value | Used In | Description |
 |---|---|---|---|---|
-| `SHIFTWISE_SCENARIO_DB_PATH` | Path | *None* | `scenario_demo.py`, `scenario_random.py` | Overrides the database path when running automated scenario or chaos simulations. |
+| `TEST_DATABASE_URL` | URL | `DATABASE_URL` | `tools/run_all.sh`, PostgreSQL tests | Dedicated test database. Tests reset application tables; never use working or production data. |
+| `SHIFTWISE_SCENARIO_DATABASE_URL` | URL | `DATABASE_URL` | `gauntlet.py`, `scenario_demo.py`, `scenario_random.py` | Simulation database; each run creates a unique retained schema. Gauntlet/demo also accept `--database-url`. The role needs `CREATE` on the database. |
+| `SHIFTWISE_LIVEWEEK_DATABASE_URL` | URL | `DATABASE_URL` | `liveweek.py` | Liveweek database; `--database-url` takes precedence. Each run creates a unique retained schema. |

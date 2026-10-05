@@ -3,7 +3,7 @@
 import logging
 import threading
 
-from shiftwise.db import database_engine, db, try_scheduler_lock
+from shiftwise.db import db, try_scheduler_lock
 from shiftwise.scheduler.engine import _schedule_week
 
 log = logging.getLogger(__name__)
@@ -25,14 +25,9 @@ def request_rebuild(week, actor="system"):
 
     PostgreSQL commits queued work and returns 0 as an enqueue sentinel. The
     scheduler has not run yet, so this is not a count of processed picks.
-    SQLite runs synchronously and returns the engine's processed-pick count.
     Call run_scheduler() directly when a completed rebuild or its count is
     required, as the explicit manager rebuild and CLI entrypoints do.
     """
-    if database_engine() == "sqlite":
-        from shiftwise.scheduler.engine import run_scheduler
-
-        return run_scheduler(week, actor)
     conn = db()
     try:
         enqueue_rebuild(conn, week)
@@ -121,5 +116,5 @@ def init_app(app):
     def start_worker():
         # Start after Gunicorn forks and after startup schema initialization.
         # Health checks also resume durable work after a process restart.
-        if app.config.get("SCHEDULER_WORKER_ENABLED", True) and database_engine() == "postgres":
+        if app.config.get("SCHEDULER_WORKER_ENABLED", True):
             worker.start()

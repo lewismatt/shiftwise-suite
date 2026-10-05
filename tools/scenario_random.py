@@ -31,18 +31,13 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
+from tools.scenario_database import prepare_database
+
+scenario_schema = prepare_database("random", os.environ.get("SHIFTWISE_SCENARIO_DATABASE_URL"))
+
 import app as appmod
 import mock_seed
 from shiftwise.security import use_csrf_aware_test_client
-
-# Isolated database: never touches the working database unless
-# SHIFTWISE_SCENARIO_DB_PATH points at it explicitly.
-appmod.DB_PATH = Path(
-    os.environ.get(
-        "SHIFTWISE_SCENARIO_DB_PATH",
-        os.environ.get("SHIFTWISE_DB_PATH", ROOT_DIR / "tools" / "scenario_random.db"),
-    )
-)
 
 seed = (
     int(sys.argv[1])
@@ -52,11 +47,6 @@ seed = (
 rng = random.Random(seed)
 print(f"\nRANDOM SEED = {seed}   (replay: python {Path(__file__).name} {seed})\n")
 
-if appmod.database_engine() == "sqlite":
-    for suf in ("", "-wal", "-shm"):
-        p = Path(str(appmod.DB_PATH) + suf)
-        if p.exists():
-            p.unlink()
 appmod.init_db(seed_demo=True)
 n_emp, n_days, n_picks = mock_seed.seed(appmod, force=True)
 print(

@@ -79,7 +79,7 @@ override retains the production entrypoint, health checks, networks and named
 volumes, including `postgres-data`. It pins the app to the bundled PostgreSQL
 service, sets local HTTPS/proxy settings, and excludes the optional production
 machine-local secrets file. `docker-compose.yml` and the production Gunicorn CMD
-are unchanged. Never include the dev override in a deployment.
+are deployment settings. Never include the dev override in a deployment.
 
 ### Stop or reset the database
 
@@ -110,10 +110,10 @@ docker compose -f docker-compose.yml config --quiet
 docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
 ```
 
-## 2. Optional host Python and SQLite workflow
+## 2. Optional host Python workflow
 
-The SQLite fallback remains available. Host tests and simulation tools require
-Python 3.12 or newer and the development dependencies:
+PostgreSQL is required for host runs, tests, and simulation tools.
+Install Python 3.12 or newer and the development dependencies:
 
 ```sh
 python3 -m venv .venv
@@ -126,31 +126,43 @@ To run outside Compose on `127.0.0.1:5000`, stop the dev stack first to free the
 ```sh
 export SHIFTWISE_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 export SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD="your-strong-manager-password"
+export DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/shiftwise"
 .venv/bin/python app.py
 ```
 
 Open `http://127.0.0.1:5000` and sign in as `manager` with the password above.
 For an empty database with demo data, set `SHIFTWISE_DEMO_SEED=1` before launching.
 
-### Mock / LAN Demo Environment
-`shiftwise-mock/app.py` starts the same application on `0.0.0.0:5001` against an isolated
-`shiftwise-mock/mock.db`, so other devices on your LAN can evaluate it:
+### Mock / LAN demo environment
+
+Provision a dedicated PostgreSQL database named `shiftwise_mock` on a reachable
+server. For a host PostgreSQL installation, `createdb -h HOST -U USER shiftwise_mock`
+creates it. Compose's PostgreSQL service is not published to the host by default;
+use an explicit local port mapping or another host-reachable PostgreSQL instance.
+
+The launcher binds `0.0.0.0:5001` so other devices on your LAN can evaluate it.
+Its default URL is `postgresql://shiftwise:shiftwise@localhost:5432/shiftwise_mock`.
+Override credentials and host with `DATABASE_URL`:
+
 ```sh
+export DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/shiftwise_mock"
+./shiftwise-mock/sync.sh --reseed
 .venv/bin/python shiftwise-mock/app.py
 ```
-`shiftwise-mock/sync.sh` reseeds that mock database from the canonical `mock_seed.py` roster:
-```sh
-./shiftwise-mock/sync.sh --reseed
-```
+
+`--reseed` replaces the target database's roster with the canonical `mock_seed.py`
+data. Never point it at production or another working database.
 
 ---
 
 ## 3. Running the Test Suite
 
-Tests use isolated temporary SQLite databases and never alter working or production databases.
+Use a dedicated PostgreSQL test database. Tests reset its application tables between cases, including identity sequences. Never point them at working or production data.
 
 ### Running with Pytest
 ```sh
+export DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/shiftwise_test"
+export TEST_DATABASE_URL="$DATABASE_URL"
 .venv/bin/pytest tests/
 ```
 
@@ -163,11 +175,19 @@ Tests use isolated temporary SQLite databases and never alter working or product
 
 ## 4. End-to-End Simulation Harnesses
 
-The repository includes three advanced simulation and chaos-testing scripts in `tools/`:
+All simulation tools require a PostgreSQL URL. Each run creates a unique schema
+without a public-schema fallback, so force-seeding cannot clear regular app tables.
+The database role needs `CREATE` permission. Gauntlet and demo accept `--database-url`;
+otherwise these tools use `SHIFTWISE_SCENARIO_DATABASE_URL`, then `DATABASE_URL`.
+Liveweek uses `--database-url`, then `SHIFTWISE_LIVEWEEK_DATABASE_URL`, then `DATABASE_URL`.
+
+Schemas are retained for inspection. The run prints its schema name; remove it
+when finished with `DROP SCHEMA <printed_schema_name> CASCADE` on the simulation
+database. This deletes all state from that run.
 
 ### 1. Gauntlet (`tools/gauntlet.py`)
-An 11-phase deterministic stress test verifying:
-- Full 10-person preference submissions
+A 13-phase deterministic stress test verifying:
+- Full mock-roster preference submissions
 - Partial pick form rejection
 - Multiple sick calls and instant auto-cover
 - Swaps, vacation ranges, past-dated vacation rejection
@@ -184,6 +204,18 @@ A 10-phase sequential simulation illustrating conflict handling step-by-step:
 ```sh
 .venv/bin/python tools/scenario_demo.py
 ```
+
+To inspect a completed demo on port 5001, launch the mock with the simulation
+database URL and its printed schema:
+
+```sh
+DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/shiftwise_test?options=-c%20search_path%3DPRINTED_SCHEMA" \
+  .venv/bin/python shiftwise-mock/app.py
+```
+
+Do not run `sync.sh --reseed` against that schema if you want to keep the
+scenario's final state.
+
 
 ### 3. House Chaos Simulation (`tools/scenario_random.py`)
 A randomized property-based chaos harness:
@@ -202,8 +234,8 @@ A randomized property-based chaos harness:
 
 ### 4. Live-Week Concurrency Gauntlet (`tools/liveweek.py`)
 A full work-week simulation under real concurrency. Boots a threaded WSGI
-server on an isolated SQLite database and drives it with actual HTTP clients:
-15 employee sessions and 2 manager sessions running the complete action
+server on an isolated PostgreSQL schema and drives it with actual HTTP clients.
+The roster is derived from `mock_seed.PREFS` plus extra employee and manager sessions, running the complete action
 matrix (ranked picks, coverage preferences, sick calls, self-swaps, switch
 requests, coworker swap invites and responses, vacation/day-off requests,
 password changes, logout cycles) plus manager triage (rebuilds, shift
@@ -213,16 +245,16 @@ specific races (double manager review, sick-vs-swap, shift-delete-vs-swap
 accept, pick storms, roster delete vs. activity, double vacation,
 unassign-vs-accept). A background auditor recomputes invariants from the
 database (capacity, orphaned rows, status validity, invite consistency,
-day-off/vacation honoring, hours caps, days-off rule, rank collisions,
-`PRAGMA integrity_check`) throughout the run.
+day-off/vacation honoring, hours caps, days-off rule, rank collisions)
+throughout the run.
 
 The gauntlet **reports** issues without fixing them. Artifacts land in
 `tools/liveweek-artifacts/run-<ts>/` (gitignored): `REPORT.md`,
 `summary.json`, `eventlog.jsonl` (every client request),
 `serverlog.jsonl` (server responses + unhandled tracebacks),
 `issues/ISSUE-*.md` (evidence + suspected code locations),
-`snapshots/` (HTML + PNG), and the final `liveweek.db`. Fixing agents should
-read `issues/` top-down and cross-reference the event logs.
+`snapshots/` (HTML + PNG). The retained PostgreSQL schema holds the final database
+state. Read `issues/` top-down and cross-reference the event logs.
 
 ```sh
 .venv/bin/python tools/liveweek.py                  # 120s ambient phase

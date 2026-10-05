@@ -32,9 +32,9 @@ The core operational workflow is:
        |                  Flask App                     |
        |  (Auth, Routes, Scheduler Engine, Coverage)    |
        +-----------------------+------------------------+
-                               | SQLite WAL
+                               | PostgreSQL connection pool
        +-----------------------v------------------------+
-       |                 scheduler.db                   |
+       |                  PostgreSQL                    |
        +------------------------------------------------+
 ```
 
@@ -127,6 +127,6 @@ Employees submit 5 types of requests through the web interface:
 The modular architecture is the foundation for these planned capabilities (no implementation yet):
 
 1. **Employee-to-Employee Shift Trade Board:** Employees post open shifts to a peer board; qualified same-house colleagues accept directly, with manager one-click approval.
-2. **Pluggable Notification Adapters:** Abstract `notify()` into backends (in-app SQLite, email via SMTP, SMS via Twilio).
+2. **Pluggable Notification Adapters:** Abstract `notify()` into backends (in-app PostgreSQL, email via SMTP, SMS via Twilio).
 3. **iCalendar / Webcal Schedule Feeds:** Signed subscriber URLs (`/schedule/<token>.ics`) so staff can sync published shifts to Google/Apple/Outlook calendars.
 4. **Multi-Week Scheduling & Templates:** Manager-saved repeating shift templates with schedules published 2–4 weeks ahead.

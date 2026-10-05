@@ -15,9 +15,9 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 #
 # SHIFTWISE_LIVEWEEK_SECONDS also overrides the live-week duration.
 #
-# DATABASE_URL=<postgres-url> (or SHIFTWISE_DB_ENGINE=postgres) runs the gate
-# against PostgreSQL: the pytest step runs the full suite and
-# liveweek targets the given database (see AGENTS.md section 4).
+# DATABASE_URL=<postgres-url> is required. The pytest step runs the full suite
+# in one process. Scenario tools and liveweek create isolated, retained schemas
+# in this database; the database role needs CREATE permission.
 
 MODE="full"
 RUN_LIVEWEEK=1
@@ -83,46 +83,35 @@ echo "--> [0] Checking entrypoint executability (tools/check_entrypoints.py)..."
 "${PYTHON}" "${ROOT_DIR}/tools/check_entrypoints.py"
 
 echo ""
-# Detect the backend the app will actually use, mirroring shiftwise/db.py:
-# SHIFTWISE_DB_ENGINE wins (case-insensitive, validated); otherwise infer from
-# DATABASE_URL (case-insensitive scheme).
+# Validate the PostgreSQL-only runtime configuration before invoking pytest.
 if [[ -v SHIFTWISE_DB_ENGINE ]]; then
-    EFFECTIVE_ENGINE="${SHIFTWISE_DB_ENGINE,,}"
-    case "${EFFECTIVE_ENGINE}" in
-        sqlite|postgres|postgresql) ;;
+    case "${SHIFTWISE_DB_ENGINE,,}" in
+        postgres|postgresql) ;;
         *)
-            echo "ERROR: SHIFTWISE_DB_ENGINE must be one of: sqlite, postgres, postgresql." >&2
+            echo "ERROR: SHIFTWISE_DB_ENGINE must be postgres or postgresql." >&2
             exit 1
             ;;
     esac
-else
-    _db_url="${DATABASE_URL:-}"
-    case "${_db_url,,}" in
-        postgres://*|postgresql://*) EFFECTIVE_ENGINE="postgres" ;;
-        *) EFFECTIVE_ENGINE="sqlite" ;;
-    esac
 fi
-IS_POSTGRES=0
-if [[ "${EFFECTIVE_ENGINE}" == "postgres" || "${EFFECTIVE_ENGINE}" == "postgresql" ]]; then
-    IS_POSTGRES=1
-    if [[ -z "${DATABASE_URL:-}" ]]; then
-        echo "ERROR: PostgreSQL backend selected but DATABASE_URL is empty." >&2
+_db_url="${DATABASE_URL:-}"
+case "${_db_url,,}" in
+    postgres://*|postgresql://*) ;;
+    *)
+        echo "ERROR: Set DATABASE_URL to a PostgreSQL URL." >&2
         exit 1
-    fi
-    # PostgreSQL tests use TEST_DATABASE_URL for isolation; default it
-    # to the gate's database when unset (mirrors the CI postgres job).
-    export TEST_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL}}"
-fi
-
-# Run the full suite on the selected backend, including in fast mode.
+        ;;
+esac
+# Existing PostgreSQL test isolation uses a shared database in one process.
+export TEST_DATABASE_URL="${TEST_DATABASE_URL:-${DATABASE_URL}}"
 PYTEST_TARGET=("${ROOT_DIR}/tests/")
-PYTEST_LABEL="Unit & Integration Test Suite (${EFFECTIVE_ENGINE})"
+PYTEST_LABEL="Unit & Integration Test Suite (postgres)"
+PYTEST_ARGS=(-p no:xdist)
 
 if [[ "${MODE}" == "fast" ]]; then
     echo "--> FAST MODE: ${PYTEST_LABEL} only."
     echo "    The full gate must still pass before a PR or merge: ./tools/run_all.sh"
     echo ""
-    "${PYTEST}" "${PYTEST_TARGET[@]}"
+    "${PYTEST}" "${PYTEST_ARGS[@]}" "${PYTEST_TARGET[@]}"
     echo ""
     echo "FAST MODE OK"
     exit 0
@@ -140,7 +129,7 @@ TOTAL=$((4 + RUN_LIVEWEEK))
 
 STEP=$((STEP + 1))
 echo "--> [${STEP}/${TOTAL}] Running ${PYTEST_LABEL} (pytest)..."
-"${PYTEST}" "${PYTEST_TARGET[@]}"
+"${PYTEST}" "${PYTEST_ARGS[@]}" "${PYTEST_TARGET[@]}"
 
 echo ""
 STEP=$((STEP + 1))
@@ -158,10 +147,7 @@ if [[ "${RUN_LIVEWEEK}" -eq 1 ]]; then
     echo ""
     STEP=$((STEP + 1))
     echo "--> [${STEP}/${TOTAL}] Running Live-Week Concurrency Gauntlet (tools/liveweek.py, ${LIVEWEEK_SECONDS}s)..."
-    LIVEWEEK_ARGS=(--duration "${LIVEWEEK_SECONDS}")
-    if [[ "${IS_POSTGRES}" -eq 1 ]]; then
-        LIVEWEEK_ARGS+=(--database-url "${DATABASE_URL}")
-    fi
+    LIVEWEEK_ARGS=(--duration "${LIVEWEEK_SECONDS}" --database-url "${DATABASE_URL}")
     "${PYTHON}" "${ROOT_DIR}/tools/liveweek.py" "${LIVEWEEK_ARGS[@]}"
 else
     echo ""

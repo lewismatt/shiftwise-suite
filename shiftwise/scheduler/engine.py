@@ -3,7 +3,7 @@
 from collections import defaultdict
 from contextlib import closing
 
-from shiftwise.db import database_engine, db, read_queries, try_scheduler_lock
+from shiftwise.db import db, read_queries, try_scheduler_lock
 from shiftwise.domain.constants import MIN_DAYS_OFF
 from shiftwise.domain.rules import (
     _assignment_limit_reason,
@@ -68,9 +68,8 @@ def _begin_week(state):
     state.notification_start = conn.execute(
         "SELECT COALESCE(MAX(id), 0) FROM notifications"
     ).fetchone()[0]
-    lock = " FOR NO KEY UPDATE" if database_engine() == "postgres" else ""
     state.shifts = conn.execute(
-        "SELECT * FROM shifts WHERE week_start=? ORDER BY id" + lock, (state.week_start,)
+        "SELECT * FROM shifts WHERE week_start=? ORDER BY id FOR NO KEY UPDATE", (state.week_start,)
     ).fetchall()
     state.shift_ids = [s["id"] for s in state.shifts]
     return bool(state.shift_ids)
@@ -356,10 +355,7 @@ def _backfill_coverage(state):
             if cover_uid is None:
                 mgr = conn.execute("SELECT id FROM users WHERE role='manager'").fetchone()
                 if mgr:
-                    # LIKE is case-sensitive on PostgreSQL (unlike SQLite),
-                    # but both the writer below and this check use the fixed
-                    # "No cover available" casing, so the match is exact on
-                    # either backend.
+                    # Match the fixed casing used by the notification writer.
                     prior_alert = conn.execute(
                         "SELECT 1 FROM notifications WHERE user_id=? "
                         "AND shift_id=? AND kind='conflict' AND "

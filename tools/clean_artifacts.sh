@@ -29,9 +29,9 @@ say() { [ "${QUIET}" -eq 1 ] || printf '%s\n' "$*"; }
 
 count=0
 
-# Databases and the pytest cache.  nullglob drops unmatched *globs*, but the
-# literal names below always reach the loop, so existence is tested explicitly
-# to keep the report (and the count) honest.
+# Historical file databases and the pytest cache. These globs clean artifacts
+# from pre-PostgreSQL runs, not runtime databases. nullglob drops unmatched
+# globs; literal names still need an explicit existence check.
 shopt -s nullglob
 for path in app.db test_*.db shiftwise-mock/mock.db tools/*.db tools/*.db-journal .pytest_cache; do
     [ -e "${path}" ] || [ -L "${path}" ] || continue

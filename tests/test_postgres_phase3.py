@@ -1,7 +1,7 @@
 """Phase 3 tests: Live PostgreSQL route and engine query verification.
 
 Validates that route queries, conflict handling (ON CONFLICT), temporal scalar
-normalization, declarative cascades, transactions (begin_write), and scheduler
+normalization, declarative cascades, transaction rollback, and scheduler
 execution work against a real PostgreSQL instance.
 
 When a live PostgreSQL server is reachable (via DATABASE_URL or the local dev
@@ -17,7 +17,6 @@ import app as appmod
 import mock_seed
 from shiftwise.db import (
     UNIQUE_VIOLATION_ERRORS,
-    begin_write,
     db,
     init_db,
     monday_of,
@@ -114,7 +113,7 @@ def test_postgres_pool_guc_options():
 
 
 def test_postgres_temporal_normalization():
-    """Verify _sqlite_scalar normalizes DATE, TIME, and TIMESTAMPTZ columns into string shapes."""
+    """PostgreSQL temporal columns use the string shapes consumed by the application."""
     conn = db()
     today_str = date.today().isoformat()
     now_str = datetime.now().isoformat(timespec="seconds")
@@ -276,10 +275,9 @@ def test_postgres_unique_violation_catch():
     conn.close()
 
 
-def test_postgres_begin_write_and_close_rollback():
-    """Verify begin_write executes without error, and close() rolls back aborted transactions."""
+def test_postgres_close_rolls_back_uncommitted_transaction():
+    """Closing a lease must roll back writes before returning it to the pool."""
     conn = db()
-    begin_write(conn)
     conn.execute(
         "INSERT INTO users (username, password, name) VALUES ('uncommitted', 'hash', 'Uncommitted')"
     )

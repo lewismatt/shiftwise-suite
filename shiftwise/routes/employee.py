@@ -20,8 +20,6 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from shiftwise.auth import login_required
 from shiftwise.db import (
     UNIQUE_VIOLATION_ERRORS,
-    begin_write,
-    database_engine,
     db,
     lock_shifts,
     lock_users,
@@ -215,14 +213,12 @@ def pick():
         week_shifts = [
             r["id"]
             for r in conn.execute(
-                "SELECT id FROM shifts WHERE week_start=? AND area=? ORDER BY id"
-                + (" FOR KEY SHARE" if database_engine() == "postgres" else ""),
+                "SELECT id FROM shifts WHERE week_start=? AND area=? ORDER BY id FOR KEY SHARE",
                 (week, my_station["station"] if my_station else "front"),
             )
         ]
-        if database_engine() == "postgres":
-            # Serialize repeated submissions by this employee after shift locks.
-            conn.execute("SELECT id FROM users WHERE id=? FOR NO KEY UPDATE", (uid,)).fetchone()
+        # Serialize repeated submissions by this employee after shift locks.
+        conn.execute("SELECT id FROM users WHERE id=? FOR NO KEY UPDATE", (uid,)).fetchone()
         day_ranked = []
         for day in DAYS:
             value = request.form.get(f"rank_day_{day}")
@@ -263,10 +259,6 @@ def pick():
             if sorted(rank for rank, _ in ranked) != list(range(1, len(week_shifts) + 1)):
                 flash("Use each shift rank exactly once so every shift has a backup.")
                 return redirect(url_for("dashboard"))
-        # Release the validation snapshot before SQLite takes its write lock.
-        if database_engine() == "sqlite":
-            conn.rollback()
-            begin_write(conn)
         conn.execute("DELETE FROM picks WHERE user_id=?", (uid,))
         cover_updates = []
         for sid in week_shifts:
@@ -285,17 +277,13 @@ def pick():
                 "ON CONFLICT (user_id, shift_id) DO UPDATE SET rank=excluded.rank",
                 [(uid, sid, rank) for rank, sid in ranked],
             )
-        if database_engine() == "postgres":
-            enqueue_rebuild(conn, week)
+        enqueue_rebuild(conn, week)
         conn.commit()
     finally:
         conn.close()
     flash(
         "Preferences saved. Shifts are assigned automatically by seniority and full-time priority."
     )
-    # SQLite is the single-process compatibility backend used by CLI scenarios.
-    if database_engine() == "sqlite":
-        run_scheduler(week)
     return redirect(url_for("dashboard"))
 
 
@@ -304,7 +292,7 @@ def pick():
 def swap(shift_id):
     """Arrange an eligible cover or leave the slot open for manager review."""
     conn = db()
-    begin_write(conn)
+
     lock_shifts(conn, [shift_id])
     uid = session["uid"]
     a = conn.execute(
@@ -492,7 +480,7 @@ def request_switch(shift_id):
         flash("Choose the shift you want to switch into.")
         return redirect(url_for("dashboard"))
     conn = db()
-    begin_write(conn)
+
     lock_shifts(conn, [shift_id, int(target)])
     uid = session["uid"]
     mine = conn.execute(
@@ -560,7 +548,7 @@ def request_employee_swap():
         return redirect(url_for("dashboard"))
 
     conn = db()
-    begin_write(conn)
+
     lock_shifts(conn, [source_id, target_id])
     uid = session["uid"]
     source = conn.execute(
@@ -687,7 +675,7 @@ def respond_to_swap(req_id):
         return redirect(url_for("my_requests"))
 
     conn = db()
-    begin_write(conn)
+
     req = conn.execute(
         "SELECT * FROM requests WHERE id=? AND kind='swap' AND target_user_id=? "
         "AND status='approved'",

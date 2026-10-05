@@ -35,20 +35,16 @@ services:
       - path: ${SHIFTWISE_ENV_FILE:-/srv/cyberdyne/secrets/shiftwise/shiftwise.env}
         required: false
     environment:
-      SHIFTWISE_DB_PATH: /data/scheduler.db
       # Default: use the bundled postgres service, assembled from
       # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB so .env changes
       # propagate automatically. Override DATABASE_URL itself in .env to
-      # point at an external database, or set it empty to run on SQLite
-      # (the pre-Phase-5 behavior). Passwords containing URL-special
-      # characters (: / @ ? #) must be percent-encoded.
+      # point at an external PostgreSQL database. Passwords containing
+      # URL-special characters (: / @ ? #) must be percent-encoded.
       DATABASE_URL: ${DATABASE_URL-postgresql://${POSTGRES_USER:-shiftwise}:${POSTGRES_PASSWORD:-shiftwise}@postgres:5432/${POSTGRES_DB:-shiftwise}}
     depends_on:
       postgres:
         condition: service_healthy
 
-    volumes:
-      - shiftwise-data:/data
     networks:
       - app-proxy
       - app-internal
@@ -106,7 +102,6 @@ networks:
   app-internal: {}
 
 volumes:
-  shiftwise-data: {}
   postgres-data: {}
   caddy-data: {}
   caddy-config: {}

@@ -16,20 +16,22 @@ if [[ ! -x "$python_bin" ]]; then
 fi
 
 if [[ "${1:-}" == "--reseed" ]]; then
-    rm -f mock.db mock.db-wal mock.db-shm
-    SHIFTWISE_DB_PATH="$PWD/mock.db" "$python_bin" - <<'PY'
-import sys
-from pathlib import Path
-ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT_DIR))
-import app
-import mock_seed
+    export DATABASE_URL="${DATABASE_URL-postgresql://shiftwise:shiftwise@localhost:5432/shiftwise_mock}"
+    export SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD="${SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD:-testbootstrap123}"
+    cd ..
+    "$python_bin" - <<'PY'
 from datetime import date
 
-app.init_db(seed_demo=True)
-employees, days, picks = mock_seed.seed(app, force=True)
-week = mock_seed.monday_of(date.today()).isoformat()
-app.run_scheduler(week)
+try:
+    import app
+    import mock_seed
+
+    app.init_db(seed_demo=True)
+    employees, days, picks = mock_seed.seed(app, force=True)
+    week = mock_seed.monday_of(date.today()).isoformat()
+    app.run_scheduler(week)
+except RuntimeError as exc:
+    raise SystemExit(str(exc)) from None
 print(f"mock database seeded: {employees} employees (FOH+BOH), "
       f"{days} days/house, {picks} pre-seeded picks")
 PY

@@ -13,7 +13,7 @@ from flask import (
 )
 
 from shiftwise.auth import login_required
-from shiftwise.db import begin_write, database_engine, db, lock_shifts, lock_users, monday_of
+from shiftwise.db import db, lock_shifts, lock_users, monday_of
 from shiftwise.domain.constants import DAYS
 from shiftwise.domain.rules import assignment_block_reason
 from shiftwise.notify import notify
@@ -130,7 +130,7 @@ def add_shift():
 @login_required(role="manager")
 def delete_shift(shift_id):
     conn = db()
-    begin_write(conn)
+
     pairs = conn.execute(
         "SELECT shift_id, target_shift_id FROM requests WHERE shift_id=? OR target_shift_id=?",
         (shift_id, shift_id),
@@ -154,14 +154,6 @@ def delete_shift(shift_id):
         "kind IN ('swap','switch','manager_unassign','sick')",
         (shift_id, shift_id),
     )
-    if database_engine() == "sqlite":
-        # The SQLite schema declares no foreign keys, so dependents are
-        # removed manually here. On PostgreSQL the ON DELETE CASCADE
-        # constraints in POSTGRES_SCHEMA drop them atomically with the
-        # shift row itself (Phase 2), so these statements are skipped.
-        conn.execute("DELETE FROM picks WHERE shift_id=?", (shift_id,))
-        conn.execute("DELETE FROM coverage_preferences WHERE shift_id=?", (shift_id,))
-        conn.execute("DELETE FROM assignments WHERE shift_id=?", (shift_id,))
     conn.execute("DELETE FROM shifts WHERE id=?", (shift_id,))
     conn.commit()
     conn.close()
@@ -417,7 +409,7 @@ _APPROVE_HANDLERS = {
 @login_required(role="manager")
 def approve_request(req_id):
     conn = db()
-    begin_write(conn)
+
     reason = request.form.get("reason", "").strip()
     if len(reason) > 500:
         conn.close()
@@ -457,7 +449,7 @@ def approve_request(req_id):
 @login_required(role="manager")
 def deny_request(req_id):
     conn = db()
-    begin_write(conn)
+
     r = conn.execute(
         "SELECT * FROM requests WHERE id=? AND NOT (kind='swap' AND target_user_id IS NOT NULL)",
         (req_id,),

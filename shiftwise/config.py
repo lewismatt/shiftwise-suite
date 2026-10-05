@@ -3,18 +3,10 @@
 import os
 import secrets
 import warnings
-from pathlib import Path
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-
-DEFAULT_DB_PATH = ROOT_DIR / "scheduler.db"
 
 
 class Config:
     """Base application configuration."""
-
-    # SQLite Database Path
-    DB_PATH = Path(os.environ.get("SHIFTWISE_DB_PATH", DEFAULT_DB_PATH))
 
     # Flask Secret Key
     SECRET_KEY = os.environ.get("SHIFTWISE_SECRET_KEY")

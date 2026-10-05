@@ -3,101 +3,19 @@
 import atexit
 import os
 import re
-import sqlite3
 import sys
 import threading
 import zlib
-from contextlib import nullcontext
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
-from pathlib import Path
 
+from psycopg import ProgrammingError
+from psycopg.conninfo import conninfo_to_dict
+from psycopg.errors import UniqueViolation
 from werkzeug.security import generate_password_hash
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-DB_PATH = Path(os.environ.get("SHIFTWISE_DB_PATH", ROOT_DIR / "scheduler.db"))
-
-SCHEMA = """
-PRAGMA journal_mode=WAL;
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY,
-    username TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'employee',
-    weekly_hours INTEGER DEFAULT 40,
-    employment_type TEXT NOT NULL DEFAULT 'part_time',
-    hired_on TEXT,
-    station TEXT NOT NULL DEFAULT 'front',  -- 'front' = front of house, 'back' = back of house
-    email TEXT,
-    phone TEXT,
-    time_format TEXT NOT NULL DEFAULT '24h'
-);
-CREATE TABLE IF NOT EXISTS shifts (
-    id INTEGER PRIMARY KEY,
-    week_start TEXT NOT NULL,
-    day TEXT NOT NULL,
-    start_time TEXT NOT NULL,
-    end_time TEXT NOT NULL,
-    slots INTEGER NOT NULL DEFAULT 1,
-    note TEXT,
-    area TEXT NOT NULL DEFAULT 'front'  -- 'front' = front of house, 'back' = back of house
-);
-CREATE TABLE IF NOT EXISTS picks (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    shift_id INTEGER NOT NULL,
-    rank INTEGER NOT NULL,
-    UNIQUE(user_id, shift_id)
-);
-CREATE TABLE IF NOT EXISTS coverage_preferences (
-    user_id INTEGER NOT NULL,
-    shift_id INTEGER NOT NULL,
-    willing INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY(user_id, shift_id)
-);
-CREATE TABLE IF NOT EXISTS assignments (
-    id INTEGER PRIMARY KEY,
-    shift_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'proposed',
-    UNIQUE(shift_id, user_id)
-);
-CREATE TABLE IF NOT EXISTS requests (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    kind TEXT NOT NULL,              -- day_off / vacation / sick / swap / switch
-    shift_id INTEGER,                -- sick: the shift missed; switch: the shift given up
-    day TEXT,                        -- day_off: which weekday
-    target_shift_id INTEGER,         -- switch: the desired shift
-    vacation_start TEXT,             -- vacation: range start (inclusive)
-    vacation_end TEXT,             -- vacation: range end (inclusive)
-    week_start TEXT,               -- day_off: the week requested
-    target_user_id INTEGER,        -- employee-directed swap: requested coworker
-    reason TEXT,                   -- decision explanation shown to requester
-    status TEXT NOT NULL DEFAULT 'approved',
-    created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS notifications (
-    id INTEGER PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    shift_id INTEGER,
-    kind TEXT NOT NULL,
-    message TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    read INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS login_attempts (
-    key TEXT PRIMARY KEY,
-    failures INTEGER NOT NULL DEFAULT 0,
-    locked_until TEXT
-);
-"""
-
-# Production PostgreSQL DDL (Phase 2). Declarative foreign keys replace the
-# manual cascade deletions the SQLite schema requires: dependent rows are
-# removed atomically via ON DELETE CASCADE, while optional shift references
-# are nulled via ON DELETE SET NULL so request/notification history survives.
+# Declarative foreign keys cascade dependent rows and preserve optional
+# request/notification history with ON DELETE SET NULL.
 POSTGRES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
@@ -275,28 +193,31 @@ _postgres_pool_lock = threading.Lock()
 
 
 def _database_engine():
-    """Select the configured database backend without opening a connection."""
+    """Require PostgreSQL connection information; never fall back to a local database."""
     configured = os.environ.get("SHIFTWISE_DB_ENGINE")
     if configured is not None:
         engine = configured.lower()
         if engine == "sqlite":
-            return "sqlite"
-        if engine in ("postgres", "postgresql"):
-            if not os.environ.get("DATABASE_URL"):
-                raise RuntimeError(
-                    "DATABASE_URL is required when SHIFTWISE_DB_ENGINE selects PostgreSQL"
-                )
-            return "postgres"
-        raise ValueError("SHIFTWISE_DB_ENGINE must be one of: sqlite, postgres, postgresql")
-
-    database_url = os.environ.get("DATABASE_URL", "")
-    if database_url.lower().startswith(("postgres://", "postgresql://")):
-        return "postgres"
-    return "sqlite"
+            raise RuntimeError("SQLite support removed — configure PostgreSQL via DATABASE_URL")
+        if engine not in ("postgres", "postgresql"):
+            raise RuntimeError("SHIFTWISE_DB_ENGINE must be postgres or postgresql")
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if not database_url:
+        raise RuntimeError(
+            "PostgreSQL is required. Set DATABASE_URL to "
+            "postgresql://USER:PASSWORD@HOST:5432/DATABASE or start the Docker Compose stack."
+        )
+    try:
+        conninfo_to_dict(database_url)
+    except ProgrammingError:
+        raise RuntimeError(
+            "DATABASE_URL must be a PostgreSQL URL or libpq connection string"
+        ) from None
+    return "postgres"
 
 
 def database_engine():
-    """Return the configured database backend: "sqlite" or "postgres"."""
+    """Return 'postgres' after validating database configuration."""
     return _database_engine()
 
 
@@ -375,7 +296,7 @@ def _qmark_to_psycopg(query):
 
 
 class _PostgresRow(dict):
-    """A dict row with positional indexing and value iteration matching sqlite3.Row."""
+    """A dict row with positional indexing and value iteration."""
 
     def __init__(self, values, description):
         self._values = tuple(values)
@@ -393,23 +314,11 @@ class _PostgresRow(dict):
         return super().__getitem__(key)
 
 
-def _sqlite_scalar(value):
-    """Present a temporal column value the way SQLite does.
+def _temporal_scalar(value):
+    """Normalize PostgreSQL temporal columns for routes, rules, and templates.
 
-    The application was written against SQLite's type system, where DATE,
-    TIME, and TIMESTAMP columns come back as TEXT. psycopg instead returns
-    native date/time/datetime objects, which breaks the app's string-based
-    handling (``date.fromisoformat`` on a date raises TypeError, ``.split``
-    and ``.strip`` don't exist on date objects, f-strings render
-    "09:00:00" instead of "09:00"). Normalizing once at the facade boundary
-    keeps every route, rule, and template working unchanged on both
-    backends:
-      - datetime -> naive "YYYY-MM-DDTHH:MM:SS". The app writes naive local
-        timestamps; the offset psycopg attaches for TIMESTAMPTZ is dropped
-        so comparisons against ``datetime.now()`` behave as on SQLite.
-      - date -> "YYYY-MM-DD".
-      - time -> "HH:MM" (shifts store HH:MM text on SQLite).
-    Non-temporal values pass through untouched.
+    Datetimes use naive local ISO timestamps, dates use YYYY-MM-DD, and
+    times use HH:MM. Non-temporal values pass through unchanged.
     """
     if isinstance(value, datetime):
         return value.replace(tzinfo=None).isoformat()
@@ -437,7 +346,7 @@ class _PostgresCursor:
     def _row(self, values):
         if values is None:
             return None
-        return _PostgresRow([_sqlite_scalar(v) for v in values], self._cursor.description)
+        return _PostgresRow([_temporal_scalar(v) for v in values], self._cursor.description)
 
     def fetchone(self):
         return self._row(self._cursor.fetchone())
@@ -541,7 +450,6 @@ def _postgres_pool_for(database_url):
             _postgres_pool = None
             _postgres_pool_url = None
         if _postgres_pool is None:
-            from psycopg.conninfo import conninfo_to_dict
             from psycopg_pool import ConnectionPool
 
             pool = ConnectionPool(
@@ -562,10 +470,13 @@ def _postgres_pool_for(database_url):
                 },
             )
             try:
-                pool.open(wait=True)
+                pool.open(wait=True, timeout=5)
             except Exception:
                 pool.close()
-                raise
+                raise RuntimeError(
+                    "PostgreSQL is unavailable. Check DATABASE_URL, database credentials, "
+                    "and that the PostgreSQL server is running and reachable."
+                ) from None
             _postgres_pool = pool
             _postgres_pool_url = database_url
         return _postgres_pool
@@ -584,21 +495,10 @@ atexit.register(_close_postgres_pool)
 
 
 def db():
-    """Create a connection for the selected SQLite or PostgreSQL backend."""
-    if _database_engine() == "postgres":
-        database_url = os.environ["DATABASE_URL"]
-        pool = _postgres_pool_for(database_url)
-        return _PostgresConnection(pool, pool.getconn())
-
-    if _postgres_pool is not None:
-        _close_postgres_pool()
-    db_path = _current_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=15.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=15000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    """Lease a PostgreSQL connection from the application pool."""
+    _database_engine()
+    pool = _postgres_pool_for(os.environ["DATABASE_URL"])
+    return _PostgresConnection(pool, pool.getconn())
 
 
 def execute_sql(conn, query, params=()):
@@ -608,7 +508,7 @@ def execute_sql(conn, query, params=()):
 
 def read_queries(conn, queries):
     """Batch independent SELECTs into one PostgreSQL pipeline round trip."""
-    context = conn.pipeline() if database_engine() == "postgres" else nullcontext()
+    context = conn.pipeline()
     cursors = []
     try:
         with context:
@@ -620,25 +520,8 @@ def read_queries(conn, queries):
             cursor.close()
 
 
-def begin_write(conn):
-    """Open a write transaction on the given connection.
-
-    SQLite takes the write lock up front with BEGIN IMMEDIATE so a
-    concurrent writer fails fast instead of deadlocking mid-run; on
-    PostgreSQL the driver opens the transaction implicitly on the first
-    statement. PostgreSQL staffing writers use row locks, and scheduler
-    runs additionally take a week-scoped transaction advisory lock.
-    """
-    if _database_engine() == "sqlite":
-        conn.execute("BEGIN IMMEDIATE")
-    # On PostgreSQL there is nothing to do: the transaction is already open.
-
-
 def try_scheduler_lock(conn, week_start):
     """Acquire a transaction lock for this week; False means another run owns it."""
-    if database_engine() == "sqlite":
-        begin_write(conn)
-        return True
     key = zlib.crc32(str(week_start).encode("utf-8"))
     if key >= 2**31:
         key -= 2**32
@@ -650,12 +533,9 @@ def lock_shifts(conn, shift_ids):
 
     PostgreSQL capacity checks must run as a separate statement after this
     lock: a count in the locking SELECT can use a snapshot from before a wait.
-    SQLite takes begin_write when the caller has not opened a transaction.
     """
-    if database_engine() == "sqlite" and not conn.in_transaction:
-        begin_write(conn)
     ids = sorted({sid for sid in shift_ids if sid is not None})
-    if database_engine() == "postgres" and ids:
+    if ids:
         placeholders = ",".join("?" for _ in ids)
         conn.execute(
             f"SELECT id FROM shifts WHERE id IN ({placeholders}) ORDER BY id FOR UPDATE", ids
@@ -665,7 +545,7 @@ def lock_shifts(conn, shift_ids):
 def lock_users(conn, user_ids, *, skip_locked=False):
     """Protect employee hours checks after taking the affected shift locks."""
     ids = sorted({uid for uid in user_ids if uid is not None})
-    if database_engine() == "postgres" and ids:
+    if ids:
         placeholders = ",".join("?" for _ in ids)
         suffix = " SKIP LOCKED" if skip_locked else ""
         return {
@@ -679,45 +559,12 @@ def lock_users(conn, user_ids, *, skip_locked=False):
     return set(ids)
 
 
-def _unique_violation_errors():
-    errors = [sqlite3.IntegrityError]
-    try:
-        from psycopg.errors import UniqueViolation
-    except ImportError:
-        # psycopg is absent in SQLite-only environments.
-        pass
-    else:
-        errors.append(UniqueViolation)
-    return tuple(errors)
-
-
-#: Exception types for unique-constraint violations on either backend, for
-#: use in `except` clauses. sqlite3 raises sqlite3.IntegrityError; psycopg
-#: raises psycopg.errors.UniqueViolation.
-UNIQUE_VIOLATION_ERRORS = _unique_violation_errors()
+UNIQUE_VIOLATION_ERRORS = (UniqueViolation,)
 
 
 def monday_of(d):
     """Return the Monday preceding or matching the given date."""
     return d - timedelta(days=d.weekday())
-
-
-def _current_db_path():
-    """Read DB_PATH from the live module, including legacy app.py overrides."""
-    module = sys.modules.get(__name__)
-    return Path(getattr(module, "DB_PATH", DB_PATH))
-
-
-def init_db(seed_demo=False, mock_roster=False):
-    """Initialize schema, apply migrations, enforce passwords, and seed data if empty.
-
-    Applies the SQLite DDL (SCHEMA) or the PostgreSQL DDL (POSTGRES_SCHEMA)
-    depending on the configured engine.
-    """
-    if _database_engine() == "postgres":
-        _init_db_postgres(seed_demo=seed_demo, mock_roster=mock_roster)
-        return
-    _init_db_sqlite(seed_demo=seed_demo, mock_roster=mock_roster)
 
 
 def _ensure_passwords_hashed(conn, seed_demo):
@@ -884,14 +731,8 @@ def _seed_if_empty(conn, seed_demo, mock_roster):
     return False
 
 
-def _init_db_postgres(seed_demo=False, mock_roster=False):
-    """Initialize the PostgreSQL schema and seed data (Phase 2).
-
-    Runs every POSTGRES_SCHEMA statement through execute_sql so qmark
-    placeholders are translated for psycopg. Declarative ON DELETE CASCADE /
-    ON DELETE SET NULL constraints replace the manual cascade deletions the
-    SQLite path still needs.
-    """
+def init_db(seed_demo=False, mock_roster=False):
+    """Initialize the PostgreSQL schema, enforce passwords, and seed empty data."""
     conn = db()
     try:
         for statement in _split_ddl(POSTGRES_SCHEMA):
@@ -923,49 +764,3 @@ def _init_db_postgres(seed_demo=False, mock_roster=False):
         # a DDL failure would leak the slot and abandon AccessExclusive
         # locks on the new tables.
         conn.close()
-
-
-def _init_db_sqlite(seed_demo=False, mock_roster=False):
-    db_path = _current_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=15.0)
-    conn.execute("PRAGMA busy_timeout=15000")
-    conn.executescript(SCHEMA)
-
-    # migration: add new columns to an existing users table if missing
-    cols = [r[1] for r in conn.execute("PRAGMA table_info(users)")]
-    if "employment_type" not in cols:
-        conn.execute(
-            "ALTER TABLE users ADD COLUMN employment_type TEXT NOT NULL DEFAULT 'part_time'"
-        )
-    if "hired_on" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN hired_on TEXT")
-    if "station" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN station TEXT NOT NULL DEFAULT 'front'")
-    if "email" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
-    if "phone" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
-    if "time_format" not in cols:
-        conn.execute("ALTER TABLE users ADD COLUMN time_format TEXT NOT NULL DEFAULT '24h'")
-    scols = [r[1] for r in conn.execute("PRAGMA table_info(shifts)")]
-    if "area" not in scols:
-        conn.execute("ALTER TABLE shifts ADD COLUMN area TEXT NOT NULL DEFAULT 'front'")
-    rcols = [r[1] for r in conn.execute("PRAGMA table_info(requests)")]
-    if "vacation_start" not in rcols:
-        conn.execute("ALTER TABLE requests ADD COLUMN vacation_start TEXT")
-    if "vacation_end" not in rcols:
-        conn.execute("ALTER TABLE requests ADD COLUMN vacation_end TEXT")
-    if "week_start" not in rcols:
-        conn.execute("ALTER TABLE requests ADD COLUMN week_start TEXT")
-    if "target_user_id" not in rcols:
-        conn.execute("ALTER TABLE requests ADD COLUMN target_user_id INTEGER")
-    if "reason" not in rcols:
-        conn.execute("ALTER TABLE requests ADD COLUMN reason TEXT")
-
-    _ensure_passwords_hashed(conn, seed_demo)
-
-    if _seed_if_empty(conn, seed_demo, mock_roster):
-        return
-    conn.commit()
-    conn.close()

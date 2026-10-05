@@ -30,13 +30,10 @@ ShiftWise deploys as a multi-container stack orchestrated via Docker Compose:
        └────────────────────────┘
 ```
 
-> The app selects its database backend from `DATABASE_URL` (PostgreSQL when
-> set to a `postgresql://` URL, SQLite otherwise). The compose stack defaults
-> to the bundled postgres service; set `DATABASE_URL` to an empty value to
-> run the stack on the legacy SQLite volume (`shiftwise-data`). Note: `app`
-> depends on the bundled `postgres` container, so compose always starts it —
-> it simply idles when the app isn't using it (empty `DATABASE_URL` or an
-> external database URL).
+> PostgreSQL is required. Compose defaults to the bundled service; override
+> `DATABASE_URL` to use an external PostgreSQL server. An unset URL outside
+> Compose, an empty URL, or an unreachable server stops application startup.
+> The bundled `postgres` service still starts when an external URL is configured.
 
 ---
 
@@ -89,10 +86,8 @@ POSTGRES_PASSWORD=change-me-in-production
 
 # Database URL for the app. The compose default (assembled in
 # docker-compose.yml from POSTGRES_USER/PASSWORD/DB) already points at the
-# bundled postgres service — set this only to point at an external database,
-# or to an empty value to run the app on the legacy SQLite database instead.
-# Note: the bundled postgres container still starts (and idles) whenever you
-# bring the stack up with compose.
+# bundled postgres service. Set this only to use an external PostgreSQL server.
+# An empty value stops app startup. The bundled postgres container still starts.
 # DATABASE_URL=postgresql://shiftwise:change-me-in-production@postgres:5432/shiftwise
 ```
 
@@ -149,9 +144,3 @@ To restore from a backup:
 cat backup-YYYYMMDDHHMMSS.sql | docker compose exec -T postgres psql -U shiftwise shiftwise
 ```
 
-> If you run the stack on SQLite instead (`DATABASE_URL` empty), the database
-> lives in the `shiftwise-data` volume at `/data/scheduler.db`. Back it up
-> with SQLite's backup API:
-> ```sh
-> docker compose exec app sqlite3 /data/scheduler.db ".backup '/data/backup-$(date +%Y%m%d%H%M%S).db'"
-> ```

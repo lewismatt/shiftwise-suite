@@ -1,6 +1,6 @@
 # ShiftWise Suite
 
-ShiftWise is a modern Flask and SQLite staff scheduling and shift-management platform tailored for hospitality and service industries with Front-of-House (FOH) and Back-of-House (BOH) operations.
+ShiftWise is a Flask and PostgreSQL staff scheduling and shift-management application for hospitality and service teams with Front-of-House (FOH) and Back-of-House (BOH) operations.
 
 Employees submit ranked preferences for weekly shifts, and the auto-scheduler generates conflict-free schedules honoring weekly hour caps, minimum days off, and strict house boundaries. Managers retain full administrative oversight with sticky assignment overrides, conflict review, and request management.
 
@@ -51,7 +51,7 @@ This deletes the project's named volumes, including database data and Caddy's
 local CA. Export and trust the new root afterward. Use `down` without `-v` to
 preserve data. Demo seeding is opt-in and only seeds an empty roster.
 The [development guide](docs/DEVELOPMENT.md) covers the full loop and the optional
-host Python/SQLite workflow.
+host Python workflow against PostgreSQL.
 
 ---
 
@@ -83,7 +83,7 @@ docker compose ps
 Comprehensive documentation is available in the [`docs/`](docs/) directory:
 
 - 📐 **[Architecture & System Design](docs/ARCHITECTURE.md):** High-level architecture, scheduling algorithms, priority sorting, coverage planning, and house boundaries.
-- 🗄️ **[Data Model & Storage Schema](docs/DATA_MODEL.md):** SQLite schema specifications, table relationships, assignment lifecycle, and request state machines.
+- [Data Model & Storage Schema](docs/DATA_MODEL.md): PostgreSQL schema, table relationships, assignment lifecycle, and request state machines.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md):** Local setup, running unit/integration tests, and using the gauntlet/chaos simulation harnesses.
 - 🚀 **[Production Deployment](docs/DEPLOYMENT.md):** Multi-container Docker Compose deployment, Caddy TLS setup, and security hardening.
 - ⚙️ **[Environment Variables](docs/ENVIRONMENT.md):** Complete reference of all `SHIFTWISE_*` configuration parameters.
@@ -94,13 +94,14 @@ Comprehensive documentation is available in the [`docs/`](docs/) directory:
 
 ## Running Tests & Simulation Harnesses
 
-All test suites use isolated temporary SQLite databases:
+Tests require a dedicated PostgreSQL database and reset its application tables between cases. Never point the test suite at working or production data. Simulation tools create separate retained schemas; their database role needs `CREATE` permission.
 
 ```sh
+export DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/shiftwise_test
 # Run entire test suite with pytest
 .venv/bin/pytest tests/
 
-# Run the 11-phase stress gauntlet
+# Run the 13-phase stress gauntlet
 .venv/bin/python tools/gauntlet.py
 
 # Run the sequential conflict scenario simulation
@@ -109,10 +110,10 @@ All test suites use isolated temporary SQLite databases:
 # Run the randomized house-chaos simulation
 .venv/bin/python tools/scenario_random.py
 
-# Run the live-week concurrency gauntlet: 15 employees + 2 managers driving
-# the app over real HTTP against an isolated SQLite DB. Surfaces database,
-# concurrency, and collision issues; writes agent-ready artifacts (issues,
-# logs, snapshots, reports) to tools/liveweek-artifacts/run-*/
+# Run the live-week concurrency gauntlet with the mock roster, extra employees,
+# and two managers driving
+# the app over real HTTP against an isolated PostgreSQL schema. Writes issues,
+# logs, snapshots, and reports to tools/liveweek-artifacts/run-*/
 .venv/bin/python tools/liveweek.py                 # default 120s ambient phase
 .venv/bin/python tools/liveweek.py --strict        # exit non-zero on findings
 
