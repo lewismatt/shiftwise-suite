@@ -16,6 +16,7 @@ git clone https://github.com/clain1016/shiftwise-suite.git
 cd shiftwise-suite
 
 # New clone only: create a session secret and opt into demo data.
+# Skip this if .env already exists — the redirect overwrites the file.
 printf 'SHIFTWISE_SECRET_KEY=%s\nSHIFTWISE_DEMO_SEED=1\n' "$(openssl rand -hex 32)" > .env
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --wait
 ```
