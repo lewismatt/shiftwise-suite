@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import insert_id, isolate_database
+from test_support import insert_id, isolate_database, postgres_engine_active
 
 import app as appmod
 
@@ -104,6 +104,11 @@ def test_manager_override():
         conn.close()
         r = c.post(f"/manager/assign/{mon}/{uid_of('sam')}", follow_redirects=True)
         assert "already full" not in r.data.decode()
+        if postgres_engine_active():
+            # /manager/assign only enqueues the rebuild on PostgreSQL; the
+            # swap_requested row is retired by the rebuild itself, so drive it
+            # explicitly (SQLite rebuilds synchronously in the request).
+            appmod.run_scheduler(WEEK)
         conn = appmod.db()
         statuses = {
             row["status"]

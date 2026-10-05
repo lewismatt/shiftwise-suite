@@ -5,7 +5,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import insert_id, isolate_database
+from test_support import (
+    insert_id,
+    isolate_database,
+    postgres_engine_active,
+    truncate_postgres_tables,
+)
 
 import app as appmod
 
@@ -16,17 +21,39 @@ def test_priority():
         WEEK = "2026-09-28"
 
         def fresh(overrides=None):
-            DB = appmod.DB_PATH
-            if DB.exists():
-                DB.unlink()
-            appmod.init_db(seed_demo=True)
+            if postgres_engine_active():
+                # PostgreSQL has no per-scenario database file: the DB_PATH
+                # unlink below is a no-op, and _seed_if_empty returns early
+                # while user rows from the previous scenario exist, so the
+                # "fresh" demo roster never materializes. Truncate the shared
+                # tables and re-seed instead. Also close the previous
+                # scenario's connection first: its idle open transaction would
+                # otherwise block the per-test TRUNCATE with LockNotAvailable.
+                if fresh.prev_conn is not None:
+                    fresh.prev_conn.close()
+                    fresh.prev_conn = None
+                trunc_conn = appmod.db()
+                try:
+                    truncate_postgres_tables(trunc_conn)
+                finally:
+                    trunc_conn.close()
+                appmod.init_db(seed_demo=True)
+            else:
+                DB = appmod.DB_PATH
+                if DB.exists():
+                    DB.unlink()
+                appmod.init_db(seed_demo=True)
             conn = appmod.db()
             conn.execute("DELETE FROM shifts")  # drop demo week, use controlled shifts
             if overrides:
                 for uid, field, val in overrides:
                     conn.execute(f"UPDATE users SET {field}=? WHERE username=?", (val, uid))
             conn.commit()
+            if postgres_engine_active():
+                fresh.prev_conn = conn
             return conn
+
+        fresh.prev_conn = None
 
         def shift(conn, day, start, end, slots):
             return insert_id(
@@ -38,7 +65,8 @@ def test_priority():
         def pick(conn, username, sid, rank):
             uid = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()[0]
             conn.execute(
-                "INSERT OR REPLACE INTO picks (user_id, shift_id, rank) VALUES (?,?,?)",
+                "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?) "
+                "ON CONFLICT (user_id, shift_id) DO UPDATE SET rank=excluded.rank",
                 (uid, sid, rank),
             )
 

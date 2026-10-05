@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -10,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import insert_id
+from test_support import insert_id, postgres_engine_active, truncate_postgres_tables
 
 import app as appmod
 
@@ -34,8 +35,22 @@ class ReviewFixes(unittest.TestCase):
         self.assertIn(b"Log out", response.data)
 
     def test_bootstrap_hashes_passwords_and_adds_employees(self):
-        with tempfile.TemporaryDirectory(prefix="shiftwise-bootstrap-") as path:
-            appmod.DB_PATH = Path(path) / "scheduler.db"
+        # The test needs a SECOND fresh database mid-test. SQLite swaps
+        # DB_PATH to a throwaway file; on PostgreSQL that swap is a no-op, so
+        # the shared database is truncated instead (the per-test isolation
+        # fixture only truncates; the next test's setUp re-seeds via init_db).
+        if postgres_engine_active():
+            conn = appmod.db()
+            try:
+                truncate_postgres_tables(conn)
+            finally:
+                conn.close()
+            bootstrap_ctx = nullcontext()
+        else:
+            _bootstrap_tmp = tempfile.TemporaryDirectory(prefix="shiftwise-bootstrap-")
+            appmod.DB_PATH = Path(_bootstrap_tmp.name) / "scheduler.db"
+            bootstrap_ctx = _bootstrap_tmp
+        with bootstrap_ctx:
             with patch.dict(
                 os.environ, {"SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD": "private-manager-passphrase"}
             ):
@@ -124,6 +139,11 @@ class ReviewFixes(unittest.TestCase):
         conn.close()
         self.login("manager")
         self.client.post(f"/manager/requests/{request_id}/deny")
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds (queued for the worker); drive the
+            # queued rebuild explicitly so the post-deny assignment is
+            # observable (SQLite request paths rebuild synchronously).
+            appmod.run_scheduler(self.week)
         conn = appmod.db()
         self.assertTrue(
             conn.execute(
@@ -156,6 +176,11 @@ class ReviewFixes(unittest.TestCase):
         for offset in (0, 3):
             day = (next_week + timedelta(days=offset)).isoformat()
             self.client.post("/request/vacation", data={"vac_start": day, "vac_end": day})
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds (queued for the worker); drive the
+            # queued rebuild explicitly so the vacation exclusions are applied
+            # before the assertions (SQLite request paths rebuild synchronously).
+            appmod.run_scheduler(next_week.isoformat())
         conn = appmod.db()
         for shift_id in shifts:
             shift = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
@@ -244,6 +269,11 @@ class ReviewFixes(unittest.TestCase):
         conn.close()
         self.login("manager")
         self.client.post(f"/manager/requests/{request_id}/deny")
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds (queued for the worker); drive the
+            # queued rebuild explicitly so the post-deny assignment is
+            # observable (SQLite request paths rebuild synchronously).
+            appmod.run_scheduler(next_week.isoformat())
         conn = appmod.db()
         shift = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
         self.assertNotIn(alex_id, appmod.unavailable_uids(conn, shift))
@@ -433,6 +463,13 @@ class ReviewFixes(unittest.TestCase):
         conn.close()
         self.login("alex")
         self.client.post(f"/swap/{shift_id}")
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds (queued for the worker); drive the
+            # queued rebuild explicitly BEFORE the first notification count so
+            # both counts observe the rebuilt state (SQLite request paths
+            # rebuild synchronously). The second call below stays as the
+            # idempotence check.
+            appmod.run_scheduler(self.week)
         conn = appmod.db()
         status = conn.execute(
             "SELECT status FROM assignments WHERE shift_id=?", (shift_id,)

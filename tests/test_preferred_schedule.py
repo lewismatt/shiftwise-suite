@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import isolate_database
+from test_support import isolate_database, postgres_engine_active
 
 import app as appmod
 
@@ -62,6 +62,10 @@ def test_preferred_schedule():
             print(f"  {user}: submitted all {len(form)} days ranked 1–7 (full backup coverage)")
 
         # the auto-scheduler already ran on every /pick; check final state
+        # (on PostgreSQL the rebuilds are debounced, so drive one explicit run
+        # over the final picks — SQLite request paths rebuild synchronously)
+        if postgres_engine_active():
+            appmod.run_scheduler(week)
         conn = appmod.db()
         print("\nPer-shift staff (auto-assigned, no confirmations):")
         all_ok = True

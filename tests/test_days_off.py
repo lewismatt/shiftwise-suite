@@ -39,7 +39,8 @@ def test_days_off():
         def pick(conn, username, sid, rank):
             uid = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()[0]
             conn.execute(
-                "INSERT OR REPLACE INTO picks (user_id, shift_id, rank) VALUES (?,?,?)",
+                "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?) "
+                "ON CONFLICT (user_id, shift_id) DO UPDATE SET rank=excluded.rank",
                 (uid, sid, rank),
             )
 

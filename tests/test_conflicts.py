@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import insert_id, isolate_database
+from test_support import insert_id, isolate_database, postgres_engine_active
 
 import app as appmod
 
@@ -82,7 +82,8 @@ def test_conflicts():
         print("3. Manual assign endpoint removed (review-only manager): OK")
 
         # --- 4. assignments happen automatically WITHOUT the manager running anything:
-        # fresh employee pick -> assignments rebuilt instantly
+        # fresh employee pick -> assignments rebuilt (instantly on SQLite; via the
+        # debounced queue on PostgreSQL, driven explicitly below)
         conn2 = appmod.db()
         conn2.execute("DELETE FROM assignments")
         conn2.commit()
@@ -98,6 +99,11 @@ def test_conflicts():
             for i, sid in enumerate([mon] + [x for x in all_shifts if x != mon])
         }
         client.post("/pick", data=picks_form)
+        if postgres_engine_active():
+            # PostgreSQL debounces rebuilds (queued for the worker); drive the
+            # queued rebuild explicitly so the auto-assign outcome is observable
+            # (SQLite request paths rebuild synchronously).
+            appmod.run_scheduler(WEEK)
         conn2 = appmod.db()
         n_mon = conn2.execute(
             "SELECT COUNT(*) c FROM assignments WHERE shift_id=?", (mon,)
