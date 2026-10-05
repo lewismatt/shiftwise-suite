@@ -6,23 +6,51 @@ Employees submit ranked preferences for weekly shifts, and the auto-scheduler ge
 
 ---
 
-## Quickstart (Local Development)
+## Quickstart (local development)
 
-### 1. Setup Virtual Environment
+Use Docker Engine or Docker Desktop, Docker Compose 2.24.4+, and OpenSSL.
+The dev stack runs the app, PostgreSQL 16 and Caddy; no manual database setup is needed.
+
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+git clone https://github.com/clain1016/shiftwise-suite.git
+cd shiftwise-suite
+
+# New clone only: create a session secret and opt into demo data.
+printf 'SHIFTWISE_SECRET_KEY=%s\nSHIFTWISE_DEMO_SEED=1\n' "$(openssl rand -hex 32)" > .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --wait
 ```
 
-### 2. Launch Development Server
+Open [https://localhost](https://localhost) and sign in with `manager` / `manager`.
+On first use, export Caddy's local root certificate and import it into your host
+or browser's trusted certificate authorities:
+
 ```sh
-export SHIFTWISE_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
-export SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD="your-strong-manager-password"
-.venv/bin/python app.py
+docker compose -f docker-compose.yml -f docker-compose.dev.yml cp \
+  caddy:/data/caddy/pki/authorities/local/root.crt /tmp/shiftwise-local-root.crt
 ```
-Open [http://127.0.0.1:5000](http://127.0.0.1:5000) and sign in as `manager`.
+
+See the [development guide](docs/DEVELOPMENT.md#local-https-trust) for platform-specific
+trust steps. Caddy manages local certificates, but its container cannot install
+trust in your host browser. Use HTTPS for sign-in; `http://127.0.0.1:5000/healthz`
+is available for direct app diagnostics.
+
+Edit Python routes or Jinja templates, save, then refresh. The checkout is mounted
+into the app container, and Flask reloads changes with its interactive debugger
+disabled. Rebuild only when dependencies or the Dockerfile change. Production
+still uses Gunicorn; the dev override is not for deployment.
+
+Reset and seed a fresh local database with one command:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v && \
+  SHIFTWISE_DEMO_SEED=1 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --wait
+```
+
+This deletes the project's named volumes, including database data and Caddy's
+local CA. Export and trust the new root afterward. Use `down` without `-v` to
+preserve data. Demo seeding is opt-in and only seeds an empty roster.
+The [development guide](docs/DEVELOPMENT.md) covers the full loop and the optional
+host Python/SQLite workflow.
 
 ---
 

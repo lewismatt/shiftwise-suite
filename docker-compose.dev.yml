@@ -1,0 +1,29 @@
+# Local development only: always layer this over docker-compose.yml.
+# Requires Docker Compose 2.24.4+ for !override.
+services:
+  app:
+    command: ["flask", "--app", "app:app", "--debug", "run", "--host=0.0.0.0", "--port=5000", "--no-debugger"]
+    # Do not load production machine-local secrets into the development stack.
+    env_file: !override
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-shiftwise}:${POSTGRES_PASSWORD:-shiftwise}@postgres:5432/${POSTGRES_DB:-shiftwise}
+      SHIFTWISE_DB_ENGINE: postgres
+      SHIFTWISE_DEMO_SEED: ${SHIFTWISE_DEMO_SEED:-0}
+      SHIFTWISE_BEHIND_PROXY: "1"
+      SHIFTWISE_SESSION_COOKIE_SECURE: "1"
+      SHIFTWISE_PUBLIC_URL: https://localhost
+    volumes:
+      - .:/app
+    ports:
+      - "127.0.0.1:5000:5000"
+
+  caddy:
+    env_file: !override []
+    environment:
+      SHIFTWISE_PUBLIC_HOSTNAME: localhost
+    # Replace, rather than append to, production's public port bindings.
+    ports: !override
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"

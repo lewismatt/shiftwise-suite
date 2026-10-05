@@ -1,30 +1,127 @@
 # Development Guide
 > Status: current · Last verified: 2026-09-29
 
-## 1. Environment Setup
+## 1. Compose development loop
 
-ShiftWise requires Python 3.12 or newer.
+Use Docker Engine (or Docker Desktop), Docker Compose 2.24.4 or newer, and
+OpenSSL. No host Python installation or manual PostgreSQL setup is needed.
+Run these commands from a new clone:
 
 ```sh
-# 1. Clone repository and navigate to folder
 git clone https://github.com/clain1016/shiftwise-suite.git
 cd shiftwise-suite
 
-# 2. Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+# Create a local session secret and explicitly opt into demo seeding.
+# Run once in a new clone; do not overwrite an existing .env.
+printf 'SHIFTWISE_SECRET_KEY=%s\nSHIFTWISE_DEMO_SEED=1\n' "$(openssl rand -hex 32)" > .env
 
-# 3. Install runtime and development dependencies
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --wait
 ```
 
----
+Open **https://localhost** through Caddy. Sign in with `manager` / `manager`;
+demo employees use their username as their password, for example `maria` / `maria`.
+The existing entrypoint initializes PostgreSQL, seeds the roster and shifts on an
+empty database, and runs the scheduler. `SHIFTWISE_DEMO_SEED=1` is opt-in:
+the override defaults to `0`. To start without demo data, set it to `0` in `.env`
+and set `SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD` to a password of at least 12 characters
+before starting with an empty database. Never use demo credentials for real deployments.
 
-## 2. Running Locally
+### Local HTTPS trust
 
-### Development Server
-To launch the primary application on `127.0.0.1:5000`:
+Caddy issues the localhost certificate using its internal certificate authority
+(CA) and attempts to install its root certificate in the container's trust store.
+It cannot install that root in your host or browser from inside Docker.
+If the browser does not already trust this CA, export its public root:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml cp \
+  caddy:/data/caddy/pki/authorities/local/root.crt /tmp/shiftwise-local-root.crt
+```
+
+Import `/tmp/shiftwise-local-root.crt` into your operating system or browser's
+trusted certificate authorities. On Debian/Ubuntu:
+
+```sh
+sudo install -m 0644 /tmp/shiftwise-local-root.crt /usr/local/share/ca-certificates/shiftwise-local.crt
+sudo update-ca-certificates
+```
+
+Firefox may require a separate import under Settings → Privacy & Security →
+Certificates → View Certificates → Authorities. On macOS, import it into Keychain
+Access and trust it for SSL; on Windows, import it into Trusted Root Certification
+Authorities. Restart the browser if needed. Caddy manages certificate issuance and
+renewal; do not generate a separate localhost server certificate.
+
+HTTP at `http://localhost` redirects to HTTPS. The app also listens directly at
+`http://127.0.0.1:5000` for diagnostics such as `/healthz`. Use HTTPS through Caddy
+for the UI and sign-in: the dev override keeps secure session cookies and proxy
+handling enabled. All published dev ports bind to loopback, not the LAN.
+
+### Edit and refresh
+
+The override mounts the checkout at `/app` and replaces the image's command with
+the Flask development server. Its reloader restarts on Python changes, and debug
+mode reloads Jinja templates on the next request. The interactive debugger is
+disabled. Flask was chosen over `gunicorn --reload` because it also reloads
+templates without listing template files individually.
+
+Edit a route in `shiftwise/routes/` or a file in `templates/`, save it, then refresh
+the browser. No image rebuild is needed for source or template edits. Rebuild after
+changing `requirements.txt` or `Dockerfile`:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --wait
+docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f app
+```
+
+The stack uses the same app image, PostgreSQL 16 and Caddy as production. The
+override retains the production entrypoint, health checks, networks and named
+volumes, including `postgres-data`. It pins the app to the bundled PostgreSQL
+service, sets local HTTPS/proxy settings, and excludes the optional production
+machine-local secrets file. `docker-compose.yml` and the production Gunicorn CMD
+are unchanged. Never include the dev override in a deployment.
+
+### Stop or reset the database
+
+Stopping without `-v` preserves the database and Caddy CA:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+```
+
+To delete this Compose project's data and start with a fresh demo database, run
+this single chained command from the checkout:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v && \
+  SHIFTWISE_DEMO_SEED=1 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build --wait
+```
+
+This deletes **all named volumes in this project**, including PostgreSQL data and
+Caddy's local CA. It is only for disposable local development data. The entrypoint
+seeds the empty database during `up`; there is no separate seed script to run.
+Export and trust the new Caddy root after every `down -v`. Ordinary `down` / `up`
+keeps existing data, and seeding never overwrites a populated roster.
+
+Validate either configuration without starting containers:
+
+```sh
+docker compose -f docker-compose.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.dev.yml config --quiet
+```
+
+## 2. Optional host Python and SQLite workflow
+
+The SQLite fallback remains available. Host tests and simulation tools require
+Python 3.12 or newer and the development dependencies:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+```
+
+To run outside Compose on `127.0.0.1:5000`, stop the dev stack first to free the port:
 
 ```sh
 export SHIFTWISE_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
@@ -32,14 +129,8 @@ export SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD="your-strong-manager-password"
 .venv/bin/python app.py
 ```
 
-Open `http://127.0.0.1:5000` and sign in with username `manager` and the password specified above.
-
-### Running with Demo Data
-To start with a pre-seeded roster and shifts:
-```sh
-export SHIFTWISE_DEMO_SEED=1
-.venv/bin/python app.py
-```
+Open `http://127.0.0.1:5000` and sign in as `manager` with the password above.
+For an empty database with demo data, set `SHIFTWISE_DEMO_SEED=1` before launching.
 
 ### Mock / LAN Demo Environment
 `shiftwise-mock/app.py` starts the same application on `0.0.0.0:5001` against an isolated
