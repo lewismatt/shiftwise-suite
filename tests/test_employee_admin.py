@@ -120,8 +120,8 @@ class EmployeeAdminTests(unittest.TestCase):
             "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)", (uid, shift_id, 1)
         )
         conn.execute(
-            "INSERT OR IGNORE INTO assignments (shift_id,user_id,status) "
-            "VALUES (?,?, 'manager_fixed')",
+            "INSERT INTO assignments (shift_id,user_id,status) "
+            "VALUES (?,?, 'manager_fixed') ON CONFLICT DO NOTHING",
             (shift_id, uid),
         )
         conn.execute(

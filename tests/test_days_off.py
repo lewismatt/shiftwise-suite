@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import isolate_database
+from test_support import insert_id, isolate_database
 
 import app as appmod
 
@@ -30,10 +30,11 @@ def test_days_off():
             return conn
 
         def shift(conn, day):
-            return conn.execute(
+            return insert_id(
+                conn,
                 "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
                 (WEEK, day, "09:00", "17:00", 3),
-            ).lastrowid
+            )
 
         def pick(conn, username, sid, rank):
             uid = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()[0]
@@ -84,30 +85,36 @@ def test_days_off():
 
         # --- 3. two shifts on the SAME day count once (8h+8h same day = 1 working day)
         conn = fresh(overrides=[("alex", "weekly_hours", 60)])
-        m1 = conn.execute(
+        m1 = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Mon", "07:00", "15:00", 3),
-        ).lastrowid
-        m2 = conn.execute(
+        )
+        m2 = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Mon", "15:00", "23:00", 3),
-        ).lastrowid
-        t = conn.execute(
+        )
+        t = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Tue", "09:00", "17:00", 3),
-        ).lastrowid
-        w = conn.execute(
+        )
+        w = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Wed", "09:00", "17:00", 3),
-        ).lastrowid
-        th = conn.execute(
+        )
+        th = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Thu", "09:00", "17:00", 3),
-        ).lastrowid
-        f = conn.execute(
+        )
+        f = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Fri", "09:00", "17:00", 3),
-        ).lastrowid
+        )
         pick(conn, "alex", m1, 1)
         pick(conn, "alex", t, 2)
         pick(conn, "alex", w, 3)

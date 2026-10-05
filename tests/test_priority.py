@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import isolate_database
+from test_support import insert_id, isolate_database
 
 import app as appmod
 
@@ -29,11 +29,11 @@ def test_priority():
             return conn
 
         def shift(conn, day, start, end, slots):
-            cur = conn.execute(
+            return insert_id(
+                conn,
                 "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
                 (WEEK, day, start, end, slots),
             )
-            return cur.lastrowid
 
         def pick(conn, username, sid, rank):
             uid = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()[0]

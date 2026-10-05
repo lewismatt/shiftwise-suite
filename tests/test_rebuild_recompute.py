@@ -5,7 +5,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test_support import isolate_database
+from test_support import insert_id, isolate_database
 
 import app as appmod
 
@@ -24,10 +24,11 @@ def test_rebuild_recompute():
         # boost hours caps so the hours cap doesn't interfere
         for u in ("alex", "sam", "jordan"):
             conn.execute("UPDATE users SET weekly_hours=80 WHERE username=?", (u,))
-        mon = conn.execute(
+        mon = insert_id(
+            conn,
             "INSERT INTO shifts (week_start, day, start_time, end_time, slots) VALUES (?,?,?,?,?)",
             (WEEK, "Mon", "09:00", "17:00", 1),
-        ).lastrowid
+        )
         conn.commit()
         conn.close()
 

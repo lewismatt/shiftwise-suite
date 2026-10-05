@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from test_support import insert_id
+
 
 def test_employee_sees_manager_note_after_approval_or_denial(isolated_db):
     appmod = isolated_db
@@ -11,12 +13,12 @@ def test_employee_sees_manager_note_after_approval_or_denial(isolated_db):
     created_at = datetime.now().isoformat()
     request_ids = {}
     for label in ("approved", "denied"):
-        cursor = conn.execute(
+        request_ids[label] = insert_id(
+            conn,
             "INSERT INTO requests (user_id, kind, day, week_start, reason, status, created_at) "
             "VALUES (?, 'day_off', 'Mon', ?, NULL, 'approved', ?)",
             (employee_id, week, created_at),
         )
-        request_ids[label] = cursor.lastrowid
     conn.commit()
     conn.close()
 

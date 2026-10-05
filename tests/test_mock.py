@@ -172,10 +172,10 @@ def test_seeded_week_fills_peak_and_nonpeak_shifts_without_rule_violations():
 
     employee_totals = conn.execute(
         "SELECT u.username, u.weekly_hours, COUNT(DISTINCT s.day) AS workdays, "
-        "SUM((CAST(substr(s.end_time,1,2) AS INTEGER)*60 + "
-        "CAST(substr(s.end_time,4,2) AS INTEGER) - "
-        "CAST(substr(s.start_time,1,2) AS INTEGER)*60 - "
-        "CAST(substr(s.start_time,4,2) AS INTEGER))/60.0) AS hours "
+        "SUM((CAST(substr(CAST(s.end_time AS TEXT),1,2) AS INTEGER)*60 + "
+        "CAST(substr(CAST(s.end_time AS TEXT),4,2) AS INTEGER) - "
+        "CAST(substr(CAST(s.start_time AS TEXT),1,2) AS INTEGER)*60 - "
+        "CAST(substr(CAST(s.start_time AS TEXT),4,2) AS INTEGER))/60.0) AS hours "
         "FROM assignments a JOIN users u ON u.id=a.user_id "
         "JOIN shifts s ON s.id=a.shift_id "
         "WHERE s.week_start=? AND a.status NOT IN ('sick','swap_requested') "

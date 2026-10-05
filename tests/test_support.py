@@ -41,6 +41,17 @@ def truncate_postgres_tables(conn):
     conn.commit()
 
 
+def insert_id(conn, sql, params=()):
+    """INSERT a row and return its auto-generated ``id`` on either backend.
+
+    ``cursor.lastrowid`` does not exist on psycopg cursors, so tests must use
+    ``RETURNING id`` instead. SQLite has supported ``RETURNING`` since 3.35.
+    The statement must not end with a semicolon.
+    """
+    row = conn.execute(sql + " RETURNING id", params).fetchone()
+    return row[0]
+
+
 def isolate_database(appmod):
     temporary = tempfile.TemporaryDirectory(prefix="shiftwise-test-")
     appmod.DB_PATH = Path(temporary.name) / "scheduler.db"
