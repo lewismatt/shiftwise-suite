@@ -13,7 +13,7 @@ from flask import (
 )
 
 from shiftwise.auth import login_required
-from shiftwise.db import begin_write, db, lock_shifts, lock_users, monday_of
+from shiftwise.db import db, lock_shifts, lock_users, monday_of
 from shiftwise.domain.rules import priority_key
 from shiftwise.notify import notify
 from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
@@ -122,7 +122,7 @@ def conflicts():
 @login_required(role="manager")
 def unassign(shift_id, user_id):
     conn = db()
-    begin_write(conn)
+
     lock_shifts(conn, [shift_id])
     shift = conn.execute("SELECT week_start FROM shifts WHERE id=?", (shift_id,)).fetchone()
     deleted = conn.execute(
@@ -157,7 +157,7 @@ def unassign(shift_id, user_id):
 def manager_assign(shift_id, user_id):
     """MANAGER OVERRIDE: placing any employee onto shifts in their house."""
     conn = db()
-    begin_write(conn)
+
     lock_shifts(conn, [shift_id])
     shift = conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
     lock_users(conn, [user_id])

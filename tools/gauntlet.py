@@ -6,6 +6,7 @@ STRICT: every behavioral check is an assertion. A regression fails the
 run with a non-zero exit code; nothing is a printed observation.
 """
 
+import argparse
 import os
 import sys
 from datetime import date, timedelta
@@ -14,21 +15,18 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
+from tools.scenario_database import prepare_database
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--database-url", default=os.environ.get("SHIFTWISE_SCENARIO_DATABASE_URL"))
+args = parser.parse_args()
+scenario_schema = prepare_database("gauntlet", args.database_url)
+
 import app as appmod
 from mock_seed import seed
 from shiftwise.security import use_csrf_aware_test_client
 
-if len(sys.argv) > 1 and sys.argv[1].endswith(".db"):
-    db_target = Path(sys.argv[1]).resolve()
-else:
-    db_target = Path(
-        os.environ.get(
-            "SHIFTWISE_SCENARIO_DB_PATH",
-            os.environ.get("SHIFTWISE_DB_PATH", ROOT_DIR / "tools" / "gauntlet.db"),
-        )
-    )
-
-appmod.DB_PATH = db_target
+# The app is imported only after its isolated PostgreSQL target is configured.
 appmod.init_db(seed_demo=True)
 seed(appmod, force=True)
 appmod.init_db(seed_demo=True)
@@ -189,13 +187,8 @@ def full_rank_form(day_to_ids, preferred_days):
 
 def schedule():
     c = appmod.db()
-    concat_col = (
-        "string_agg(u.name, ', ')"
-        if appmod.database_engine() == "postgres"
-        else "GROUP_CONCAT(u.name, ', ')"
-    )
     rows = c.execute(
-        f"SELECT s.day, s.slots, COUNT(a.id) n, {concat_col} names "
+        "SELECT s.day, s.slots, COUNT(a.id) n, string_agg(u.name, ', ') names "
         "FROM shifts s LEFT JOIN assignments a ON a.shift_id=s.id "
         "AND a.status NOT IN ('sick','swap_requested') "
         "LEFT JOIN users u ON u.id=a.user_id "
@@ -222,9 +215,7 @@ def run_gauntlet():
         r = client.post("/pick", data=form, follow_redirects=True)
         assert b"Preferences saved" in r.data, u
     print("  all saved; schedule:")
-    # Force the synchronous rebuild explicitly: on SQLite /pick already
-    # rebuilt, but on Postgres the rebuild is debounced and would race
-    # the understaffed assertion below.
+    # The rebuild is debounced; finish it before the understaffed assertion.
     appmod.run_scheduler(WEEK)
     sched = schedule()
     for d, n, s, names in sched:
@@ -330,9 +321,7 @@ def run_gauntlet():
         follow_redirects=True,
     )
     assert b"Vacation requested" in r.data, "vacation request was not accepted"
-    # Force the synchronous rebuild explicitly: on SQLite the vacation route
-    # already rebuilt, but on Postgres the rebuild is debounced and would race
-    # the in-vacation holdings assertion below.
+    # Finish the debounced rebuild before checking in-vacation holdings.
     appmod.run_scheduler(WEEK)
     c = appmod.db()
     req = c.execute(
@@ -415,9 +404,7 @@ def run_gauntlet():
     assert j_mine, "jordan holds no shift to unassign"
     tgt = j_mine[0]
     client.post(f"/manager/unassign/{tgt['id']}/{uid('jordan')}", follow_redirects=True)
-    # Force the synchronous rebuild explicitly: on SQLite the unassign route
-    # already rebuilt, but on Postgres the rebuild is debounced and would race
-    # the backfill assertion below.
+    # Finish the debounced rebuild before checking backfill.
     appmod.run_scheduler(WEEK)
     c = appmod.db()
     gone = c.execute(
@@ -476,9 +463,7 @@ def run_gauntlet():
     form = full_rank_form(day_shift_ids(house_of("riley")), ["Mon", "Tue", "Wed", "Fri", "Sat"])
     r = client.post("/pick", data=form, follow_redirects=True)
     assert b"Preferences saved" in r.data, "riley cap-stress pick rejected"
-    # Force the synchronous rebuild explicitly: on SQLite /pick already
-    # rebuilt, but on Postgres the rebuild is debounced and would race the
-    # hours-cap and notification assertions below (both are scheduler output).
+    # Finish the debounced rebuild before checking hours caps and notifications.
     appmod.run_scheduler(WEEK)
     hrs = assigned_hours("riley")
     assert hrs <= 16.01, f"riley over hours cap: {hrs:.1f}h > 16h"
@@ -527,9 +512,7 @@ def run_gauntlet():
     form = full_rank_form(day_shift_ids(sam_house), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sun"])
     r = client.post("/pick", data=form, follow_redirects=True)
     assert b"Preferences saved" in r.data, "sam 6-day pick rejected"
-    # Force the synchronous rebuild explicitly: on SQLite /pick already
-    # rebuilt, but on Postgres the rebuild is debounced and would race
-    # these assertions.
+    # Finish the debounced rebuild before checking scheduler output.
     appmod.run_scheduler(WEEK)
     days = workdays("sam")
     assert len(days) == 5, f"expected exactly 5 workdays, got {sorted(days)}"
@@ -564,13 +547,8 @@ def run_gauntlet():
         "a.status='sick' AND s.week_start=?",
         (WEEK,),
     ).fetchall()
-    hour_expr = (
-        "SUM(EXTRACT(EPOCH FROM (s2.end_time - s2.start_time)) / 3600.0)"
-        if appmod.database_engine() == "postgres"
-        else "SUM(julianday(s2.end_time)-julianday(s2.start_time))*24"
-    )
     over = c.execute(
-        f"SELECT u.username, {hour_expr} h "
+        "SELECT u.username, SUM(EXTRACT(EPOCH FROM (s2.end_time - s2.start_time)) / 3600.0) h "
         "FROM assignments a JOIN users u ON u.id=a.user_id JOIN shifts s2 ON "
         "s2.id=a.shift_id WHERE a.status NOT IN ('sick','swap_requested') AND s2.week_start=? GROUP BY a.user_id, u.username",
         (WEEK,),

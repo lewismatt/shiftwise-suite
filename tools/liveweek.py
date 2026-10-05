@@ -8,9 +8,9 @@ call in sick, request vacations and days off, exchange swap invites and
 answer them; managers rebuild the schedule, add/delete shifts, triage the
 request queue, edit the roster and assign overrides.
 
-The run targets SQLite (isolated file) by default; pass --database-url (or
-set SHIFTWISE_LIVEWEEK_DATABASE_URL) to run the whole gauntlet — server,
-drills, and audits — against PostgreSQL instead.
+The run targets PostgreSQL through --database-url, SHIFTWISE_LIVEWEEK_DATABASE_URL,
+or DATABASE_URL, in that order. Each run creates an isolated schema, retained
+for inspection; the target role needs CREATE permission on the database.
 
 Goal: surface database, concurrency, and collision issues — WITHOUT fixing
 them. Everything is recorded as agent-ready artifacts:
@@ -23,7 +23,6 @@ them. Everything is recorded as agent-ready artifacts:
       issues/ISSUE-*.md one file per issue: evidence, traceback, code locations
       snapshots/*.html  HTML page snapshots taken at issue time
       snapshots/*.png   rendered screenshots (when a chrome binary exists)
-      liveweek.db       database state at end of run (SQLite runs only)
 
 Usage:
     .venv/bin/python tools/liveweek.py [--duration 120] [--seed N]
@@ -45,7 +44,6 @@ import random
 import re
 import shutil
 import socket
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -131,18 +129,14 @@ HOTSPOTS = {  # category -> suspected code locations for fixing agents
         "shiftwise/ frame is the failing call site"
     ],
     "orphan_assignment": [
-        "shiftwise/routes/roster.py:delete_employee (manual cascade, no FK "
-        "constraints in schema -> races with concurrent writers)",
+        "shiftwise/routes/roster.py:delete_employee (account deletion and staffing locks)",
         "shiftwise/routes/conflicts.py:unassign",
         "shiftwise/scheduler/engine.py:run_scheduler (assignment deletes)",
     ],
     "orphan_row": [
-        "shiftwise/routes/roster.py:delete_employee (manual cascade, no FK "
-        "constraints in schema -> races with concurrent writers)",
-        "shiftwise/routes/manager.py:delete_shift (supersedes requests "
-        "referencing the deleted shift but leaves dangling shift_id/"
-        "target_shift_id references that persist forever)",
-        "shiftwise/db.py:SCHEMA (no FOREIGN KEY declarations despite PRAGMA foreign_keys=ON)",
+        "shiftwise/routes/roster.py:delete_employee (account deletion and pending invites)",
+        "shiftwise/routes/manager.py:delete_shift (request supersede before shift deletion)",
+        "shiftwise/db.py:POSTGRES_SCHEMA (foreign-key cascades and nullable history references)",
     ],
     "capacity_violation": [
         "shiftwise/routes/conflicts.py:manager_assign",
@@ -185,7 +179,7 @@ HOTSPOTS = {  # category -> suspected code locations for fixing agents
         "rebuilds)",
     ],
     "integrity": [
-        "shiftwise/db.py (connection/pragma handling)",
+        "shiftwise/db.py (pooled connection and transaction handling)",
     ],
     "behavior_mismatch": [
         "the flash/status expectation in this issue names the route; read "
@@ -196,9 +190,8 @@ HOTSPOTS = {  # category -> suspected code locations for fixing agents
         "check the attached event context before assuming a harness bug",
     ],
     "latency": [
-        "shiftwise/db.py:db() (fresh connection per call, busy_timeout 15s)",
-        "shiftwise/scheduler/engine.py:run_scheduler (BEGIN IMMEDIATE "
-        "serializes every rebuild; called from many routes)",
+        "shiftwise/db.py:db() (pool leases and PostgreSQL lock waits)",
+        "shiftwise/scheduler/debounce.py:process_rebuilds (queued rebuilds and week locks)",
     ],
     "server_error": [
         "see serverlog.jsonl around the timestamp",
@@ -497,33 +490,19 @@ class WSession:
 class World:
     """Read-only DB helpers + mutable credential map (password changes)."""
 
-    def __init__(self, db_path: Path, rec: Recorder, appmod=None):
-        self.db_path = db_path
+    def __init__(self, rec: Recorder, appmod):
         self.rec = rec
         self.appmod = appmod
         self.lock = threading.Lock()
         self.passwords: dict[str, str] = {}
 
     def engine(self):
-        """Database backend for this run: "sqlite" or "postgres"."""
-        if self.appmod is not None:
-            return self.appmod.database_engine()
-        return "sqlite"
+        """Database backend for this run."""
+        return self.appmod.database_engine()
 
     def connect(self):
-        """Open a read connection through the app's DB facade.
-
-        On SQLite the facade returns a sqlite3 connection with row_factory
-        and busy_timeout already configured — identical to the previous
-        direct connect. On PostgreSQL it returns a pooled psycopg
-        connection, so the same audit code runs against both backends.
-        """
-        if self.appmod is not None:
-            return self.appmod.db()
-        con = sqlite3.connect(self.db_path, timeout=30.0)
-        con.row_factory = sqlite3.Row
-        con.execute("PRAGMA busy_timeout=30000")
-        return con
+        """Open a pooled PostgreSQL connection through the app's DB facade."""
+        return self.appmod.db()
 
     def q(self, sql, args=()):
         con = self.connect()
@@ -618,28 +597,8 @@ def run_audit(world: World, rec: Recorder, phase: str, final: bool = False):
     findings: list[tuple[str, str, str, str]] = []  # sev, category, key, note
     con = None
     try:
-        engine = world.engine()
         con = world.connect()
-        if engine == "sqlite":
-            integrity = con.execute("PRAGMA integrity_check").fetchall()
-            if any(r[0] != "ok" for r in integrity):
-                findings.append(
-                    (
-                        "CRITICAL",
-                        "integrity",
-                        "integrity_check",
-                        "; ".join(str(r[0]) for r in integrity),
-                    )
-                )
-            fk = con.execute("PRAGMA foreign_key_check").fetchall()
-            if fk:
-                findings.append(
-                    ("CRITICAL", "integrity", "foreign_key_check", f"{len(fk)} violations")
-                )
-        # else: PostgreSQL has no PRAGMA integrity_check / foreign_key_check.
-        # Page-level corruption detection has no portable equivalent and is
-        # skipped; the explicit per-table orphan checks below subsume
-        # foreign_key_check on both backends.
+        # Cross-table orphan checks below audit referential integrity.
         users = {r["id"]: r for r in con.execute("SELECT * FROM users")}
         shifts = {r["id"]: r for r in con.execute("SELECT * FROM shifts")}
 
@@ -919,9 +878,7 @@ def run_audit(world: World, rec: Recorder, phase: str, final: bool = False):
                 )
             )
     except Exception as exc:
-        # sqlite3.Error on SQLite, psycopg.Error on PostgreSQL; widened from
-        # sqlite3.Error so an audit failure becomes a CRITICAL finding on
-        # either backend instead of killing the auditor thread.
+        # Audit errors become CRITICAL findings instead of killing the thread.
         findings.append(("CRITICAL", "integrity", "audit_sql", f"audit query failed: {exc}"))
     finally:
         if con is not None:
@@ -2353,13 +2310,11 @@ class _GunicornServer:
 
 
 # ---------------------------------------------------------------- boot
-def boot_server(db_path: Path, run_dir: Path, workers=1, threads=2):
+def boot_server(run_dir: Path, workers=1, threads=2):
     """Import the app with the harness DB, install capture hooks, start a
     real threaded WSGI server on an ephemeral port."""
-    os.environ.setdefault("SHIFTWISE_DB_PATH", str(db_path))
     import app as appmod  # noqa: PLC0415  (side-effect import on purpose)
 
-    appmod.DB_PATH = db_path
     if workers > 1:
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
@@ -2437,11 +2392,10 @@ def boot_server(db_path: Path, run_dir: Path, workers=1, threads=2):
     return appmod, srv, f"http://127.0.0.1:{srv.server_port}"
 
 
-def seed_world(appmod, db_path: Path, rec):
+def seed_world(appmod):
     """mock roster (10 employees) + 5 extra employees + 1 extra manager."""
     import mock_seed
 
-    appmod.DB_PATH = db_path
     appmod.init_db(seed_demo=True)
     mock_seed.seed(appmod, force=True)
     appmod.init_db(seed_demo=True)  # migration/hash pass, like tools/gauntlet.py
@@ -2505,10 +2459,9 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=str, default=None)
     ap.add_argument(
         "--database-url",
-        default=os.environ.get("SHIFTWISE_LIVEWEEK_DATABASE_URL"),
-        help="PostgreSQL URL for the run (e.g. postgresql://shiftwise:shiftwise"
-        "@127.0.0.1:5432/shiftwise). When unset, the run uses an isolated "
-        "SQLite file exactly as before.",
+        default=os.environ.get("SHIFTWISE_LIVEWEEK_DATABASE_URL") or os.environ.get("DATABASE_URL"),
+        help="PostgreSQL URL (defaults to SHIFTWISE_LIVEWEEK_DATABASE_URL or "
+        "DATABASE_URL). A fresh retained schema isolates the run.",
     )
     ap.add_argument(
         "--strict", action="store_true", help="exit 2 when CRITICAL/HIGH findings exist"
@@ -2519,8 +2472,8 @@ def main(argv=None) -> int:
         ap.error("--workers must be between 1 and 8")
     if not 1 <= args.threads <= 16:
         ap.error("--threads must be between 1 and 16")
-    if args.workers > 1 and not args.database_url:
-        ap.error("--workers >1 requires --database-url (an isolated PostgreSQL target)")
+    if not args.database_url:
+        ap.error("set DATABASE_URL, SHIFTWISE_LIVEWEEK_DATABASE_URL, or --database-url")
     seed = args.seed if args.seed is not None else random.SystemRandom().randrange(2**31)
     rng = random.Random(seed)
 
@@ -2529,27 +2482,23 @@ def main(argv=None) -> int:
         Path(args.out) if args.out else ROOT_DIR / "tools" / "liveweek-artifacts" / f"run-{ts}"
     )
     run_dir.mkdir(parents=True, exist_ok=True)
-    db_path = run_dir / "liveweek.db"
 
     rec = Recorder(run_dir)
     boot_server.rec = rec  # hook wiring needs the recorder before import
 
     print(f"liveweek: artifacts -> {run_dir}")
     print(f"liveweek: seed={seed}")
-    if args.database_url:
-        # Must be set before the app is imported and init_db() runs: the db
-        # facade reads DATABASE_URL whenever it selects the backend, and
-        # seeding must create the PostgreSQL schema, not the SQLite one.
-        os.environ["DATABASE_URL"] = args.database_url
-        print("liveweek: targeting PostgreSQL")
     try:
-        appmod, srv, base = boot_server(db_path, run_dir, args.workers, args.threads)
+        from tools.scenario_database import prepare_database
+
+        scenario_schema = prepare_database("liveweek", args.database_url)
+        appmod, srv, base = boot_server(run_dir, args.workers, args.threads)
     except Exception:
         print("harness failed to boot server:\n" + traceback.format_exc())
         return 1
     try:
-        seed_world(appmod, db_path, rec)
-        world = World(db_path, rec, appmod)
+        seed_world(appmod)
+        world = World(rec, appmod)
         world_week = appmod.monday_of(date.today()).isoformat()
         import mock_seed
 
@@ -2771,14 +2720,11 @@ def main(argv=None) -> int:
                 "week": world_week,
                 "strict": args.strict,
                 "engine": world.engine(),
-                "db": (
-                    re.sub(
-                        r"://([^:/?#]+):[^@/?#]*@",
-                        r"://\1:***@",
-                        args.database_url or os.environ.get("DATABASE_URL", ""),
-                    )
-                    if world.engine() == "postgres"
-                    else str(run_dir / "liveweek.db")
+                "schema": scenario_schema,
+                "db": re.sub(
+                    r"://([^:/?#]+):[^@/?#]*@",
+                    r"://\1:***@",
+                    args.database_url,
                 ),
             },
         )

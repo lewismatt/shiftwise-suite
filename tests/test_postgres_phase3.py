@@ -1,7 +1,7 @@
 """Phase 3 tests: Live PostgreSQL route and engine query verification.
 
 Validates that route queries, conflict handling (ON CONFLICT), temporal scalar
-normalization, declarative cascades, transactions (begin_write), and scheduler
+normalization, declarative cascades, transaction rollback, and scheduler
 execution work against a real PostgreSQL instance.
 
 When a live PostgreSQL server is reachable (via DATABASE_URL or the local dev
@@ -9,7 +9,7 @@ container), these tests execute against it. Otherwise, they skip gracefully.
 """
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -17,7 +17,6 @@ import app as appmod
 import mock_seed
 from shiftwise.db import (
     UNIQUE_VIOLATION_ERRORS,
-    begin_write,
     db,
     init_db,
     monday_of,
@@ -114,7 +113,7 @@ def test_postgres_pool_guc_options():
 
 
 def test_postgres_temporal_normalization():
-    """Verify _sqlite_scalar normalizes DATE, TIME, and TIMESTAMPTZ columns into string shapes."""
+    """PostgreSQL temporal columns use the string shapes consumed by the application."""
     conn = db()
     today_str = date.today().isoformat()
     now_str = datetime.now().isoformat(timespec="seconds")
@@ -276,10 +275,9 @@ def test_postgres_unique_violation_catch():
     conn.close()
 
 
-def test_postgres_begin_write_and_close_rollback():
-    """Verify begin_write executes without error, and close() rolls back aborted transactions."""
+def test_postgres_close_rolls_back_uncommitted_transaction():
+    """Closing a lease must roll back writes before returning it to the pool."""
     conn = db()
-    begin_write(conn)
     conn.execute(
         "INSERT INTO users (username, password, name) VALUES ('uncommitted', 'hash', 'Uncommitted')"
     )
@@ -292,39 +290,281 @@ def test_postgres_begin_write_and_close_rollback():
     assert row is None
 
 
+def test_postgres_catalog_tables_and_fk_delete_rules():
+    """The live schema must expose all application tables and exact FK actions."""
+    expected_tables = {
+        "users",
+        "shifts",
+        "picks",
+        "coverage_preferences",
+        "assignments",
+        "requests",
+        "notifications",
+        "login_attempts",
+        "scheduler_rebuilds",
+    }
+    expected_rules = {
+        ("picks", "user_id"): "CASCADE",
+        ("picks", "shift_id"): "CASCADE",
+        ("coverage_preferences", "user_id"): "CASCADE",
+        ("coverage_preferences", "shift_id"): "CASCADE",
+        ("assignments", "shift_id"): "CASCADE",
+        ("assignments", "user_id"): "CASCADE",
+        ("requests", "user_id"): "CASCADE",
+        ("notifications", "user_id"): "CASCADE",
+        ("requests", "shift_id"): "SET NULL",
+        ("requests", "target_shift_id"): "SET NULL",
+        ("requests", "target_user_id"): "SET NULL",
+        ("notifications", "shift_id"): "SET NULL",
+    }
+    conn = db()
+    try:
+        tables = {
+            row["table_name"]
+            for row in conn.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema=current_schema() AND table_type='BASE TABLE'"
+            )
+        }
+        assert expected_tables <= tables
+        rules = conn.execute(
+            "SELECT kcu.table_name, kcu.column_name, rc.delete_rule "
+            "FROM information_schema.referential_constraints rc "
+            "JOIN information_schema.key_column_usage kcu "
+            "ON kcu.constraint_catalog=rc.constraint_catalog "
+            "AND kcu.constraint_schema=rc.constraint_schema "
+            "AND kcu.constraint_name=rc.constraint_name "
+            "WHERE kcu.table_schema=current_schema()"
+        ).fetchall()
+        assert sorted(tuple(row) for row in rules) == sorted(
+            (table, column, action) for (table, column), action in expected_rules.items()
+        )
+    finally:
+        conn.close()
+
+
 def test_postgres_declarative_fk_cascades():
-    """Verify deleting a shift cascades to picks, coverage_preferences, and assignments."""
+    """Shift deletion cascades staffing but preserves superseded history."""
     mock_seed.seed(appmod, force=True)
     conn = db()
-    shift = conn.execute("SELECT id FROM shifts LIMIT 1").fetchone()["id"]
-    maria = conn.execute("SELECT id FROM users WHERE username='maria'").fetchone()["id"]
+    try:
+        shift = conn.execute("SELECT id, week_start FROM shifts ORDER BY id LIMIT 1").fetchone()
+        shift_id = shift["id"]
+        maria = conn.execute("SELECT id FROM users WHERE username='maria'").fetchone()["id"]
+        devon = conn.execute("SELECT id FROM users WHERE username='devon'").fetchone()["id"]
+        future_week = (date.fromisoformat(shift["week_start"]) + timedelta(weeks=1)).isoformat()
+        other_shift = conn.execute(
+            "INSERT INTO shifts (week_start, day, start_time, end_time, area) "
+            "VALUES (?, 'Mon', '09:00', '17:00', 'front') RETURNING id",
+            (future_week,),
+        ).fetchone()["id"]
+        conn.executemany(
+            "INSERT INTO assignments (shift_id, user_id, status) VALUES (?, ?, 'manager_fixed')",
+            [(shift_id, maria), (other_shift, devon)],
+        )
+        conn.executemany(
+            "INSERT INTO coverage_preferences (user_id, shift_id, willing) VALUES (?, ?, ?)",
+            [(maria, shift_id, True), (devon, other_shift, False)],
+        )
+        conn.execute(
+            "INSERT INTO picks (user_id, shift_id, rank) VALUES (?, ?, 1)", (devon, other_shift)
+        )
+        source_request = conn.execute(
+            "INSERT INTO requests (user_id, kind, shift_id, target_shift_id) "
+            "VALUES (?, 'switch', ?, ?) RETURNING id",
+            (maria, shift_id, other_shift),
+        ).fetchone()["id"]
+        target_request = conn.execute(
+            "INSERT INTO requests (user_id, kind, shift_id, target_shift_id) "
+            "VALUES (?, 'switch', ?, ?) RETURNING id",
+            (devon, other_shift, shift_id),
+        ).fetchone()["id"]
+        other_request = conn.execute(
+            "INSERT INTO requests (user_id, kind, shift_id, status) "
+            "VALUES (?, 'sick', ?, 'denied') RETURNING id",
+            (devon, other_shift),
+        ).fetchone()["id"]
+        history_notification = conn.execute(
+            "INSERT INTO notifications (user_id, shift_id, kind, message) "
+            "VALUES (?, ?, 'conflict', 'Archived shift history') RETURNING id",
+            (maria, shift_id),
+        ).fetchone()["id"]
+        other_notification = conn.execute(
+            "INSERT INTO notifications (user_id, shift_id, kind, message, read) "
+            "VALUES (?, ?, 'conflict', 'Unaffected shift history', TRUE) RETURNING id",
+            (devon, other_shift),
+        ).fetchone()["id"]
+        conn.commit()
+        for table in ("picks", "coverage_preferences", "assignments"):
+            assert conn.execute(f"SELECT 1 FROM {table} WHERE shift_id=?", (shift_id,)).fetchone()
+    finally:
+        conn.close()
 
-    conn.execute(
-        "INSERT INTO assignments (shift_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-        (shift, maria),
+    client = appmod.app.test_client()
+    assert (
+        client.post("/login", data={"username": "manager", "password": "manager"}).status_code
+        == 302
     )
-    conn.execute(
-        "INSERT INTO coverage_preferences (user_id, shift_id, willing) VALUES (?, ?, TRUE) "
-        "ON CONFLICT (user_id, shift_id) DO UPDATE SET willing=TRUE",
-        (maria, shift),
-    )
-    conn.commit()
+    response = client.post(f"/manager/shift/delete/{shift_id}")
+    assert response.status_code == 302
 
-    # Verify rows exist
-    assert conn.execute("SELECT 1 FROM picks WHERE shift_id=?", (shift,)).fetchone()
-    assert conn.execute("SELECT 1 FROM coverage_preferences WHERE shift_id=?", (shift,)).fetchone()
-    assert conn.execute("SELECT 1 FROM assignments WHERE shift_id=?", (shift,)).fetchone()
+    conn = db()
+    try:
+        assert conn.execute("SELECT id FROM shifts WHERE id=?", (shift_id,)).fetchone() is None
+        for table in ("picks", "coverage_preferences", "assignments"):
+            assert (
+                conn.execute(f"SELECT 1 FROM {table} WHERE shift_id=?", (shift_id,)).fetchall()
+                == []
+            )
+        for request_id, expected_source, expected_target in (
+            (source_request, None, other_shift),
+            (target_request, other_shift, None),
+        ):
+            history = conn.execute(
+                "SELECT shift_id, target_shift_id, status FROM requests WHERE id=?", (request_id,)
+            ).fetchone()
+            assert tuple(history) == (expected_source, expected_target, "superseded")
+        history = conn.execute(
+            "SELECT user_id, shift_id, message FROM notifications WHERE id=?",
+            (history_notification,),
+        ).fetchone()
+        assert tuple(history) == (maria, None, "Archived shift history")
+        assert conn.execute("SELECT id FROM users WHERE id=?", (devon,)).fetchone()["id"] == devon
+        assert conn.execute("SELECT id FROM shifts WHERE id=?", (other_shift,)).fetchone()[
+            "id"
+        ] == (other_shift)
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, rank FROM picks WHERE shift_id=?", (other_shift,)
+            ).fetchone()
+        ) == (devon, 1)
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, willing FROM coverage_preferences WHERE shift_id=?", (other_shift,)
+            ).fetchone()
+        ) == (devon, False)
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, status FROM assignments WHERE shift_id=?", (other_shift,)
+            ).fetchone()
+        ) == (devon, "manager_fixed")
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, shift_id, status FROM requests WHERE id=?", (other_request,)
+            ).fetchone()
+        ) == (devon, other_shift, "denied")
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, shift_id, message, read FROM notifications WHERE id=?",
+                (other_notification,),
+            ).fetchone()
+        ) == (devon, other_shift, "Unaffected shift history", True)
+    finally:
+        conn.close()
 
-    # Delete shift: database ON DELETE CASCADE must drop all child rows atomically
-    conn.execute("DELETE FROM shifts WHERE id=?", (shift,))
-    conn.commit()
 
-    assert not conn.execute("SELECT 1 FROM picks WHERE shift_id=?", (shift,)).fetchall()
-    assert not conn.execute(
-        "SELECT 1 FROM coverage_preferences WHERE shift_id=?", (shift,)
-    ).fetchall()
-    assert not conn.execute("SELECT 1 FROM assignments WHERE shift_id=?", (shift,)).fetchall()
-    conn.close()
+def test_postgres_user_cascades_preserve_other_users_and_shifts():
+    """Account deletion cascades owned rows, nulls invitee history, and stays scoped."""
+    mock_seed.seed(appmod, force=True)
+    conn = db()
+    try:
+        maria = conn.execute("SELECT id FROM users WHERE username='maria'").fetchone()["id"]
+        devon = conn.execute("SELECT id FROM users WHERE username='devon'").fetchone()["id"]
+        shift_id, other_shift = [
+            row["id"] for row in conn.execute("SELECT id FROM shifts ORDER BY id LIMIT 2")
+        ]
+        other_pick = tuple(
+            conn.execute(
+                "SELECT user_id, shift_id, rank FROM picks WHERE user_id=? AND shift_id=?",
+                (devon, other_shift),
+            ).fetchone()
+        )
+        conn.executemany(
+            "INSERT INTO assignments (shift_id, user_id, status) VALUES (?, ?, 'manager_fixed')",
+            [(shift_id, maria), (other_shift, devon)],
+        )
+        conn.executemany(
+            "INSERT INTO coverage_preferences (user_id, shift_id, willing) VALUES (?, ?, ?)",
+            [(maria, shift_id, True), (maria, other_shift, True), (devon, other_shift, False)],
+        )
+        conn.execute(
+            "INSERT INTO requests (user_id, kind, shift_id) VALUES (?, 'sick', ?)",
+            (maria, shift_id),
+        )
+        invite_history = conn.execute(
+            "INSERT INTO requests (user_id, kind, shift_id, target_user_id, status) "
+            "VALUES (?, 'swap', ?, ?, 'superseded') RETURNING id",
+            (devon, other_shift, maria),
+        ).fetchone()["id"]
+        other_request = conn.execute(
+            "INSERT INTO requests (user_id, kind, shift_id) VALUES (?, 'sick', ?) RETURNING id",
+            (devon, other_shift),
+        ).fetchone()["id"]
+        conn.execute(
+            "INSERT INTO notifications (user_id, shift_id, kind, message) "
+            "VALUES (?, ?, 'conflict', 'Deleted account history')",
+            (maria, shift_id),
+        )
+        other_notification = conn.execute(
+            "INSERT INTO notifications (user_id, shift_id, kind, message, read) "
+            "VALUES (?, ?, 'conflict', 'Unaffected account history', TRUE) RETURNING id",
+            (devon, other_shift),
+        ).fetchone()["id"]
+        conn.commit()
+        for table in ("picks", "coverage_preferences", "assignments", "requests", "notifications"):
+            assert conn.execute(f"SELECT 1 FROM {table} WHERE user_id=?", (maria,)).fetchone()
+
+        conn.execute("DELETE FROM users WHERE id=?", (maria,))
+        conn.commit()
+
+        assert conn.execute("SELECT id FROM users WHERE id=?", (maria,)).fetchone() is None
+        for table in ("picks", "coverage_preferences", "assignments", "requests", "notifications"):
+            assert conn.execute(f"SELECT 1 FROM {table} WHERE user_id=?", (maria,)).fetchall() == []
+        assert conn.execute("SELECT id FROM users WHERE id=?", (devon,)).fetchone()["id"] == devon
+        assert [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM shifts WHERE id IN (?, ?) ORDER BY id", (shift_id, other_shift)
+            )
+        ] == [shift_id, other_shift]
+        assert tuple(
+            conn.execute(
+                "SELECT shift_id, willing FROM coverage_preferences WHERE user_id=?", (devon,)
+            ).fetchone()
+        ) == (other_shift, False)
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, status FROM assignments WHERE shift_id=?", (other_shift,)
+            ).fetchone()
+        ) == (devon, "manager_fixed")
+        assert (
+            tuple(
+                conn.execute(
+                    "SELECT user_id, shift_id, rank FROM picks WHERE user_id=? AND shift_id=?",
+                    (devon, other_shift),
+                ).fetchone()
+            )
+            == other_pick
+        )
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, shift_id, target_user_id, status FROM requests WHERE id=?",
+                (invite_history,),
+            ).fetchone()
+        ) == (devon, other_shift, None, "superseded")
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, shift_id, status FROM requests WHERE id=?", (other_request,)
+            ).fetchone()
+        ) == (devon, other_shift, "approved")
+        assert tuple(
+            conn.execute(
+                "SELECT user_id, shift_id, message, read FROM notifications WHERE id=?",
+                (other_notification,),
+            ).fetchone()
+        ) == (devon, other_shift, "Unaffected account history", True)
+    finally:
+        conn.close()
 
 
 def test_postgres_roster_ordering_query():

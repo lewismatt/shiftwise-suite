@@ -20,8 +20,6 @@ from werkzeug.security import generate_password_hash
 from shiftwise.auth import login_required
 from shiftwise.db import (
     UNIQUE_VIOLATION_ERRORS,
-    begin_write,
-    database_engine,
     db,
     lock_shifts,
     monday_of,
@@ -174,7 +172,7 @@ def delete_employee(user_id):
         flash("Confirm employee deletion before continuing.")
         return redirect(url_for("roster.roster"))
     conn = db()
-    begin_write(conn)
+
     # Cascading account deletion touches staffing and requests; take the same
     # shift-first order as rebuilds, including shifts named by pending invites.
     shift_ids = [r[0] for r in conn.execute("SELECT id FROM shifts ORDER BY id")]
@@ -185,11 +183,6 @@ def delete_employee(user_id):
     if not employee:
         conn.close()
         abort(404)
-    # These tables have no cascading foreign keys on SQLite; remove the
-    # employee's history before removing the account to avoid dangling user
-    # references. On PostgreSQL the ON DELETE CASCADE constraints in
-    # POSTGRES_SCHEMA handle this atomically (Phase 2), so the manual
-    # deletes are skipped there.
     pending_invites = conn.execute(
         "SELECT user_id FROM requests WHERE target_user_id=? AND kind='swap' AND status='approved'",
         (user_id,),
@@ -201,13 +194,8 @@ def delete_employee(user_id):
             "conflict",
             "Your shift swap request was cancelled because the invited employee was removed.",
         )
-    if database_engine() == "sqlite":
-        for table in ("assignments", "picks", "coverage_preferences", "requests", "notifications"):
-            conn.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
-    # Swap invites naming the removed employee as invitee are cancelled
-    # explicitly on both engines: the schema uses ON DELETE SET NULL for
-    # requests.target_user_id, which would otherwise leave approved invites
-    # pointing at nobody.
+    # Cancel invites explicitly: ON DELETE SET NULL would leave approved
+    # requests pointing at nobody.
     conn.execute("DELETE FROM requests WHERE target_user_id=?", (user_id,))
     conn.execute("DELETE FROM users WHERE id=? AND role='employee'", (user_id,))
     conn.commit()

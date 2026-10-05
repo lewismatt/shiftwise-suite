@@ -6,6 +6,11 @@ This document serves as the complete, step-by-step engineering specification and
 
 > **Current state (2026-10-03):** Phases 1–3 and 5 are delivered in PRs #16, #17, #30 and #31. PR #34 contained the Phase 4 checklist only. PR #35 completes the Phase 4 implementation and review follow-up.
 
+> **Runtime cutover (#46, epic #44):** PostgreSQL is the only supported runtime.
+> SQLite fallback paths, database-path exports, and SQLite-only tests are removed.
+> The phase descriptions below record the migration history. Current setup is in
+> [DEVELOPMENT.md](DEVELOPMENT.md) and [ENVIRONMENT.md](ENVIRONMENT.md).
+
 ---
 
 ## 1. Problem Statement & Motivation

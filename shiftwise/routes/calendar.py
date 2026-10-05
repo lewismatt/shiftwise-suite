@@ -21,9 +21,7 @@ calendar_bp = Blueprint("calendar", __name__)
 def healthz():
     try:
         conn = db()
-        # the users table only exists after init_db ran: a missing table
-        # means the database was never initialized (sqlite auto-creates
-        # the file on connect, so SELECT 1 alone would falsely report ok)
+        # Require initialized application tables, not just a reachable server.
         conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
         conn.close()
         return {"status": "ok"}, 200

@@ -27,7 +27,7 @@ def test_hours_audit_distinguishes_manager_override_from_automatic_excess(isolat
     )
     conn.commit()
     conn.close()
-    world = World(appmod.DB_PATH, Recorder(tmp_path), appmod)
+    world = World(Recorder(tmp_path), appmod)
     run_audit(world, world.rec, "manual")
     issue = next(i for i in world.rec.issues if i["category"] == "hours_cap")
     assert issue["severity"] == "MEDIUM"
@@ -56,9 +56,7 @@ def test_manager_review_queue_excludes_employee_owned_invites(isolated_db, tmp_p
     )
     conn.commit()
     conn.close()
-    assert [
-        r["kind"] for r in World(appmod.DB_PATH, Recorder(tmp_path), appmod).pending_requests()
-    ] == ["day_off"]
+    assert [r["kind"] for r in World(Recorder(tmp_path), appmod).pending_requests()] == ["day_off"]
 
 
 @pytest.mark.parametrize("new_sick_request", [False, True])
@@ -100,7 +98,7 @@ def test_sick_swap_drill_ignores_history_but_detects_new_duplicates(
     monkeypatch.setattr(liveweek, "fresh_session", lambda *args: sess)
     rec = Recorder(tmp_path)
     ctx = SimpleNamespace(
-        world=World(appmod.DB_PATH, rec, appmod),
+        world=World(rec, appmod),
         rec=rec,
         rng=random.Random(0),
         base="http://test",

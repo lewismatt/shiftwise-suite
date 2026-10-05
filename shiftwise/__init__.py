@@ -6,7 +6,7 @@ from flask import Flask, g, session
 
 from shiftwise.auth import login_required
 from shiftwise.config import Config
-from shiftwise.db import DB_PATH, SCHEMA, db, init_db, monday_of
+from shiftwise.db import POSTGRES_SCHEMA, db, init_db, monday_of
 from shiftwise.domain.constants import DAYS, MIN_DAYS_OFF
 from shiftwise.domain.rules import (
     assignment_block_reason,
@@ -27,6 +27,12 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 
 def create_app(config_class=Config):
     """Application factory for ShiftWise."""
+    # Validate configuration and connectivity before serving any requests.
+    conn = db()
+    try:
+        conn.execute("SELECT 1").fetchone()
+    finally:
+        conn.close()
     flask_app = Flask(
         __name__,
         template_folder=str(ROOT_DIR / "templates"),
@@ -83,8 +89,7 @@ __all__ = [
     "app",
     "init_db",
     "monday_of",
-    "DB_PATH",
-    "SCHEMA",
+    "POSTGRES_SCHEMA",
     "DAYS",
     "MIN_DAYS_OFF",
     "login_required",

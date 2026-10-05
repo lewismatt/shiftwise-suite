@@ -2,14 +2,13 @@ FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    SHIFTWISE_DB_PATH=/data/scheduler.db \
     SHIFTWISE_HOST=0.0.0.0 \
     SHIFTWISE_PORT=5000
 
 RUN groupadd --gid 10001 shiftwise \
     && useradd --uid 10001 --gid 10001 --shell /bin/false --create-home --home-dir /home/shiftwise shiftwise \
-    && mkdir -p /app /data \
-    && chown -R shiftwise:shiftwise /app /data /home/shiftwise
+    && mkdir -p /app \
+    && chown -R shiftwise:shiftwise /app /home/shiftwise
 
 WORKDIR /app
 

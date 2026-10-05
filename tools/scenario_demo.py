@@ -15,11 +15,12 @@ reaction is visible:
   Phase 9:  manager unassigns an at-cap employee -> someone else backfills
   Phase 10: two simultaneous sick calls on the same shift -> two coverers
 
-Run against the MOCK DB (scheduler-mock), never the real one.
-Prints a schedule snapshot after every phase. The mock is left in the
-final state so you can click through it on port 5001.
+Runs in a fresh retained PostgreSQL schema, never the regular app tables.
+Prints a schedule snapshot after every phase. The schema is left in the
+final state for inspection.
 """
 
+import argparse
 import os
 import sys
 from collections import defaultdict
@@ -28,27 +29,16 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT_DIR))
 
+from tools.scenario_database import prepare_database
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--database-url", default=os.environ.get("SHIFTWISE_SCENARIO_DATABASE_URL"))
+args = parser.parse_args()
+scenario_schema = prepare_database("demo", args.database_url)
+
 import app as appmod
 import mock_seed
 from shiftwise.security import use_csrf_aware_test_client
-
-if len(sys.argv) > 1 and sys.argv[1].endswith(".db"):
-    db_target = Path(sys.argv[1]).resolve()
-else:
-    db_target = Path(
-        os.environ.get(
-            "SHIFTWISE_SCENARIO_DB_PATH",
-            os.environ.get("SHIFTWISE_DB_PATH", ROOT_DIR / "tools" / "scenario_demo.db"),
-        )
-    )
-
-appmod.DB_PATH = db_target
-
-if appmod.database_engine() == "sqlite":
-    for suffix in ("", "-wal", "-shm"):
-        p = Path(str(appmod.DB_PATH) + suffix)
-        if p.exists():
-            p.unlink()
 
 appmod.init_db(seed_demo=True)
 conn = appmod.db()
@@ -68,6 +58,8 @@ conn.close()
 mock_seed.seed(appmod, force=True)
 
 use_csrf_aware_test_client(appmod.app)
+# CLI phases drive completed rebuilds explicitly instead of racing the worker.
+appmod.app.config["SCHEDULER_WORKER_ENABLED"] = False
 client = appmod.app.test_client()
 DAYS = appmod.DAYS
 week = appmod.monday_of(appmod.date.today()).isoformat()
@@ -204,6 +196,7 @@ def run_demo():
         )
         response = client.post("/pick", data=form, follow_redirects=True)
         assert b"Preferences saved" in response.data, user
+    appmod.run_scheduler(week)
     snapshot("after all submit preferences (auto-assigned, no confirmations)")
 
     # ================================================= PHASE 2: sick call
@@ -214,6 +207,7 @@ def run_demo():
     mon = next(s for s in holding("maria") if s["day"] == "Mon")
     before = active_staff(mon["id"])
     client.post(f"/request/sick/{mon['id']}", follow_redirects=True)
+    appmod.run_scheduler(week)
     new_staff = set(active_staff(mon["id"]).items()) - set(before.items())
     print(
         f"  maria marked 'out sick'; instant coverer: "
@@ -227,6 +221,7 @@ def run_demo():
     print("=" * 64)
     login("taylor")
     client.post("/request/day_off", data={"day": "Tue"}, follow_redirects=True)
+    appmod.run_scheduler(week)
     snapshot("after taylor's day-off (Tue)")
 
     # ================================================= PHASE 4: vacation
@@ -241,6 +236,7 @@ def run_demo():
         data={"vac_start": today.isoformat(), "vac_end": vend},
         follow_redirects=True,
     )
+    appmod.run_scheduler(week)
     conn = appmod.db()
     sam_left = [
         r2["day"]
@@ -288,6 +284,7 @@ def run_demo():
         ).fetchone()[0]
         conn.close()
         client.post(f"/manager/requests/{rid}/approve", follow_redirects=True)
+        appmod.run_scheduler(week)
         conn = appmod.db()
         still = conn.execute(
             "SELECT s.day FROM assignments a JOIN shifts s ON s.id=a.shift_id "
@@ -315,6 +312,7 @@ def run_demo():
         tgt = d_shifts[0]
         before = active_staff(tgt["id"])
         client.post(f"/swap/{tgt['id']}", follow_redirects=True)
+        appmod.run_scheduler(week)
         conn = appmod.db()
         gone = conn.execute(
             "SELECT 1 FROM assignments WHERE shift_id=? AND user_id=?",
@@ -342,6 +340,7 @@ def run_demo():
     conn.close()
     form = full_form(day_shift_ids("back"), ["Mon", "Tue", "Wed", "Fri", "Sat"])
     assert b"Preferences saved" in client.post("/pick", data=form, follow_redirects=True).data
+    appmod.run_scheduler(week)
     conn = appmod.db()
     notifs = [
         n["message"]
@@ -366,6 +365,7 @@ def run_demo():
     conn.close()
     form = full_form(day_shift_ids("front"), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sun"])
     assert b"Preferences saved" in client.post("/pick", data=form, follow_redirects=True).data
+    appmod.run_scheduler(week)
     conn = appmod.db()
     notifs = [
         n["message"]
@@ -398,6 +398,7 @@ def run_demo():
         client.post(
             f"/manager/unassign/{victim['shift_id']}/{victim['user_id']}", follow_redirects=True
         )
+        appmod.run_scheduler(week)
         conn = appmod.db()
         new = conn.execute(
             "SELECT u.name FROM assignments a JOIN users u ON u.id=a.user_id "
@@ -431,6 +432,7 @@ def run_demo():
     for h in mon_holders:
         login(h["username"])
         client.post(f"/request/sick/{h['shift_id']}", follow_redirects=True)
+    appmod.run_scheduler(week)
     if mon_holders:
         sid = mon_holders[0]["shift_id"]
         conn = appmod.db()
@@ -458,7 +460,7 @@ def run_demo():
         print("  no Monday holders to test with")
     snapshot("final schedule after conflict scenarios")
 
-    print(f"\nScenario database: {appmod.DB_PATH}")
+    print(f"\nScenario PostgreSQL schema: {scenario_schema}")
     print("Manager login: manager/manager · employees: username = password.")
 
 

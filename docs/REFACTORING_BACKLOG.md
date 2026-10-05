@@ -36,9 +36,9 @@ patches and restoration without external delivery calls.
 
 **Verification.** Run `pytest tests/test_employee_schedule_links.py
 tests/test_notification_facade.py -v` and the full `./tools/run_all.sh` gate.
-Pyflakes must report no new findings in the touched files; the existing dynamic
-`DB_PATH` export warning remains tracked under R5. The `shiftwise/db.py` lookup
-of `app` for demo seeding is outside this notification refactor.
+Pyflakes must report no new findings in touched files. Issue #46 removes the
+database-path proxy; notification patch forwarding remains. The `shiftwise/db.py`
+lookup of `app` for demo seeding is outside this notification refactor.
 
 ## R2 — Split `run_scheduler` into phases
 
@@ -107,6 +107,10 @@ open.
 ## R5 — `app.py` `__all__` / `DB_PATH` proxy
 
 **Status:** implemented in [PR #25](https://github.com/clain1016/shiftwise-suite/pull/25).
+
+Issue #46 removes the `DB_PATH` export and database-path proxy for the
+PostgreSQL-only runtime. The resolution below records the earlier SQLite facade;
+notification patch forwarding remains supported.
 
 **Problem (resolved).** `app.py` listed `"DB_PATH"` in `__all__`, but nothing bound
 that name at module level — it only resolved via the `_AppModule.__getattribute__`

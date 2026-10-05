@@ -20,9 +20,9 @@ follow the same shift lock order to avoid deadlocks with those writers.
 Automatic vacation coverage now honors weekly hours and days-off limits.
 Coverage on different shifts locks the candidate employee before checking
 hours (H2). Explicit manager overrides retain their existing authority and
-remain visible in liveweek reports. SQLite keeps synchronous rebuilds and
-`begin_write`; these changes do not establish PostgreSQL performance guarantees
-for SQLite. C1–C3 are FIXED for PostgreSQL in PR #35.
+remain visible in liveweek reports. C1–C3 are FIXED for PostgreSQL in PR #35.
+Issue #46 removes SQLite from the runtime. SQLite findings and migration
+comparisons below are historical evidence, not supported deployment options.
 
 1. Pick the highest-severity unfixed item.
 2. Read the linked liveweek issue files in `tools/liveweek-artifacts/` for
@@ -37,7 +37,7 @@ for SQLite. C1–C3 are FIXED for PostgreSQL in PR #35.
 
 ### C1 — `database is locked` causes HTTP 500 under concurrent load
 
-**Status:** FIXED for PostgreSQL (PR #35); SQLite retains its compatibility path.
+**Status:** FIXED for PostgreSQL (PR #35); SQLite runtime removed in #46.
 
 **Severity:** CRITICAL · **Reproducible:** Yes (every liveweek run)  
 **Seeds:** 42 (7 occurrences), 9999 (5 occurrences)
@@ -112,7 +112,7 @@ serialized lock. A read-then-insert pattern allows two writers to both see
 
 ### C3 — Pick storm: multiple 5xx during all-employee concurrent submission
 
-**Status:** FIXED for PostgreSQL (PR #35); SQLite retains synchronous rebuilds.
+**Status:** FIXED for PostgreSQL (PR #35); SQLite runtime removed in #46.
 
 **Severity:** CRITICAL · **Reproducible:** Yes (both seeds)  
 **Seeds:** 42 (4 requests → 5xx), 9999 (1 request → 5xx)
