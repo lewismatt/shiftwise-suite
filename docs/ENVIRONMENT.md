@@ -1,5 +1,5 @@
 # Environment Variables Reference
-> Status: current · Last verified: 2026-09-29
+> Status: current · Last verified: 2026-10-04
 
 All ShiftWise configuration is driven through environment variables prefixed with `SHIFTWISE_`.
 
@@ -23,7 +23,7 @@ All ShiftWise configuration is driven through environment variables prefixed wit
 | Variable | Type | Default Value | Used In | Description & Recommendations |
 |---|---|---|---|---|
 | `DATABASE_URL` | Connection string | *(compose default: bundled postgres; otherwise required)* | `shiftwise/db.py`, `docker-compose.yml` | Required PostgreSQL URL (`postgresql://` or `postgres://`) or libpq connection string. Startup validates configuration and connectivity before serving requests. Empty, invalid, or unreachable values stop startup; Compose assembles its default from `POSTGRES_*`. |
-| `SHIFTWISE_DB_ENGINE` | String | `postgres` | `shiftwise/db.py` | Optional explicit selection: `postgres` or `postgresql`. `sqlite` errors with "SQLite support removed — configure PostgreSQL via DATABASE_URL". |
+| `SHIFTWISE_DB_ENGINE` | String | `postgres` | `shiftwise/db.py` | Optional explicit engine selection. Only `postgres` and `postgresql` are accepted; any other value stops startup. `sqlite` raises "SQLite support removed — configure PostgreSQL via DATABASE_URL"; an unrecognized value raises "SHIFTWISE_DB_ENGINE must be postgres or postgresql". PostgreSQL is the only supported runtime. |
 | `POSTGRES_DB` | String | `shiftwise` | `docker-compose.yml` | Database name created by the bundled postgres service. If changed, update `DATABASE_URL` to match. |
 | `POSTGRES_USER` | String | `shiftwise` | `docker-compose.yml` | Database user for the bundled postgres service. If changed, update `DATABASE_URL` to match. |
 | `POSTGRES_PASSWORD` | String | `shiftwise` | `docker-compose.yml` | Database password for the bundled postgres service. **Change this in `.env` for any non-local deployment**; the default is a development convenience only. If changed, update `DATABASE_URL` to match. |

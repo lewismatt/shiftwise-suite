@@ -34,6 +34,10 @@ comparisons below are historical evidence, not supported deployment options.
 ---
 
 ## CRITICAL
+> **Historical (SQLite runtime).** C1–C3, H1–H3 and M1 below were observed against the SQLite runtime
+> removed in #46 (epic #44); C1–C3 were addressed on PostgreSQL in PR #35. They are retained as the
+> decision record that motivated the migration. Re-verify any item against the current PostgreSQL stack
+> before acting on it.
 
 ### C1 — `database is locked` causes HTTP 500 under concurrent load
 
@@ -286,6 +290,10 @@ IDs per area, and build the rank form using all of them (like `day_shift_ids`
 in `scenario_demo.py`).
 
 **Code location:** `tools/scenario_random.py:94-97`
+
+> **Historical decision record.** This evaluation predates the #46 runtime cutover and is retained as the
+> rationale for standardizing on PostgreSQL. SQLite is not a supported deployment or test mode; the
+> blueprint below describes the migration as planned, not current setup (see [DEVELOPMENT.md](DEVELOPMENT.md)).
 
 ## Architectural Evaluation: SQLite Optimization vs. PostgreSQL Migration
 

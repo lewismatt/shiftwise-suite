@@ -1,5 +1,5 @@
 # Production Deployment Guide
-> Status: current · Last verified: 2026-10-02
+> Status: current · Last verified: 2026-10-04
 
 ## 1. Overview
 
@@ -7,6 +7,7 @@ ShiftWise deploys as a multi-container stack orchestrated via Docker Compose:
 - **`app` container:** Python 3.12-slim executing Gunicorn with 2 workers and 2 threads. Runs as non-root user `shiftwise` (`UID 10001`).
 - **`postgres` container:** PostgreSQL 16 (alpine) with a persistent `postgres-data` volume and a `pg_isready` healthcheck. The app connects via `DATABASE_URL` and waits for postgres to be healthy before starting.
 - **`caddy` container:** Caddy 2.9 reverse proxy providing automatic HTTPS (Let's Encrypt / ZeroSSL), HTTP/2 & HTTP/3 support, modern TLS ciphers, and security header injection.
+The `app` container serves the server-rendered Flask UI as well as the API; there is no separate frontend container.
 
 ```
        [ Client HTTPS Traffic ]

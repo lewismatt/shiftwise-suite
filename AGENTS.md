@@ -10,16 +10,16 @@
 - **Preserve `app.py` as the WSGI and API Facade:**
   - The core domain logic, routes, and database access reside in the modular `shiftwise/` package.
   - Root `app.py` must remain intact for WSGI servers (`app:app`), CLI scripts, and existing test suites.
-  - Any module-level monkeypatching expected by legacy tests (such as `app.DB_PATH`, `app.smtplib.SMTP`, `app.urllib.request.urlopen`, and helper re-exports) must dynamically propagate to `shiftwise.db` and related modules. Avoid static descriptor bindings that fail under Python 3.14 module caching.
+  - Any module-level monkeypatching expected by legacy callers (such as `app.smtplib.SMTP`, `app.urllib.request.urlopen`, `app.send_schedule_link`, and helper re-exports) must dynamically propagate to the consuming `shiftwise` modules. Avoid static descriptor bindings that fail under Python 3.14 module caching. The pre-#46 `app.DB_PATH` database-path proxy is gone — the runtime is PostgreSQL-only.
   - **Re-export Database & Domain Helpers:** Any new public utility or helper added to `shiftwise/db.py` (e.g. `execute_sql`) or domain subpackages must be explicitly imported, re-exported in root `app.py`, and included in `__all__`.
 
 ## 3. Workspace Hygiene & Artifact Management
 - **No Stale Test Artifacts:**
-  - Tests and simulation harnesses may generate SQLite databases (`app.db`, `test_*.db`, `shiftwise-mock/mock.db`, `tools/*.db`) and cache directories (`__pycache__`, `.pytest_cache`).
-  - Always clean up temporary databases and caches before committing, creating PRs, or proceeding to deployment.
-  - Simulation tools like `tools/liveweek.py`, `tools/gauntlet.py`, `tools/scenario_demo.py`, and `tools/scenario_random.py` write local databases (`tools/*.db`); remove these before pushing or checking status.
+  - Tests and simulation harnesses write no local database files. Pytest truncates the shared PostgreSQL tables between cases, and the simulation tools (`tools/liveweek.py`, `tools/gauntlet.py`, `tools/scenario_demo.py`, `tools/scenario_random.py`) create retained, uniquely-named PostgreSQL schemas. Cache directories (`__pycache__`, `.pytest_cache`) are still generated.
+  - Always clean up caches and any leftover local database files before committing, creating PRs, or proceeding to deployment.
+  - Remove retained simulation schemas when finished: `DROP SCHEMA <printed_schema_name> CASCADE` on the simulation database.
   - `git status` must be completely clean (`nothing to commit, working tree clean`) with no untracked artifacts.
-- The canonical cleanup is `./tools/clean_artifacts.sh` (databases, `__pycache__`, `*.pyc`, `.pytest_cache`); add `--liveweek-artifacts` to also drop the gauntlet findings kept for fixing agents. `tools/run_all.sh` runs it on entry and on exit, so a normal or aborted gate leaves the tree clean; a `SIGKILL`ed run still needs the manual command.
+- The canonical cleanup is `./tools/clean_artifacts.sh` (leftover pre-PostgreSQL database files, `__pycache__`, `*.pyc`, `.pytest_cache`); add `--liveweek-artifacts` to also drop the gauntlet findings kept for fixing agents. `tools/run_all.sh` runs it on entry and on exit, so a normal or aborted gate leaves the tree clean; a `SIGKILL`ed run still needs the manual command.
 
 ## 4. Verification Standard
 
@@ -39,13 +39,12 @@
     (`tools/scenario_random.py 42`, pinned seed) completes without error;
   - the live-week concurrency gauntlet (`tools/liveweek.py`) completes without harness error; its findings are recorded as artifacts in `tools/liveweek-artifacts/` (gitignored) for fixing agents — they are reports, not suite failures (`--strict` enforces them in CI). Duration is configurable via `--liveweek-seconds N` or `SHIFTWISE_LIVEWEEK_SECONDS`;
   - `docker compose config` validates.
-- PostgreSQL acceptance: `DATABASE_URL=<redacted> ./tools/run_all.sh` runs the
-  whole gate against PostgreSQL. The backend is detected the same way the app detects it
-  (`SHIFTWISE_DB_ENGINE` first, else inferred from `DATABASE_URL`); in Postgres mode the pytest step runs
-  the full suite in a single process with per-test PostgreSQL isolation,
-  `TEST_DATABASE_URL` defaults to `DATABASE_URL`, and liveweek gets `--database-url`. Target a fresh
-  database for a reproducible run. Without Postgres indicators, every step runs on isolated SQLite
-  exactly as before.
+- PostgreSQL acceptance: the gate is PostgreSQL-only. `DATABASE_URL=<postgres-url> ./tools/run_all.sh` runs
+  the whole gate against that database, and the runner fails fast when `DATABASE_URL` is unset or not a
+  `postgres://` / `postgresql://` URL (`SHIFTWISE_DB_ENGINE`, if set, must be `postgres` or `postgresql`).
+  The pytest step runs the full suite in a single process with per-test PostgreSQL isolation (an autouse
+  fixture truncates the shared tables before and after each test); `TEST_DATABASE_URL` defaults to
+  `DATABASE_URL`, and liveweek gets `--database-url`. Target a fresh database for a reproducible run.
 - Failure contract: the scenario steps (`gauntlet.py`, `scenario_random.py`) fail the gate on unhandled exceptions
   or failed assertions — including the gauntlet's no-understaffing check (phase 1) and no-capacity-violation
   check (final audit); the final audit's printed summaries (sick rows, weekly hours, request log) are
@@ -72,7 +71,7 @@
   - Items are severity-ranked (CRITICAL → MEDIUM). Work them one per PR, highest severity first.
   - Each item includes a liveweek seed for reproducibility — re-run with `--seed N` to verify a fix.
 - **`docs/REFACTORING_BACKLOG.md`** lists structural refactors (code cleanliness, not bugs). Do not confuse these with known issues — they are separate work streams.
-- **`docs/POSTGRES_MIGRATION_PLAN.md`** contains the approved 5-phase engineering handoff for migrating from SQLite to PostgreSQL to resolve concurrency, locking, and multi-store scalability requirements.
+- **`docs/POSTGRES_MIGRATION_PLAN.md`** records the completed 5-phase SQLite→PostgreSQL migration (Phases 1–5 delivered; #46 removed the SQLite runtime, #47 made tests/CI/gate PostgreSQL-only). It is a historical design record — PostgreSQL is the only supported runtime.
 
 ## 7. Database Adapter & Connection Pool Lifecycle Standards
 - **`sqlite3.Row` Emulation Semantics:**
@@ -88,5 +87,5 @@
 - `pyproject.toml` configures ruff: `line-length = 100`, `target-version = "py312"`, rules `F`, `E4`, `E7`, `E9`, `I` (import sorting).
 - Before opening a PR, run `ruff check` and `ruff format --check` from the repo root; both must be clean.
 - The per-file ignores in `pyproject.toml` are deliberate and documented there — do not "fix" them away:
-  - `app.py`: the §2 monkeypatch facade (`DB_PATH` in `__all__` resolving via the proxy, importlib-first import ordering).
+  - `app.py`: the §2 compatibility facade (legacy notification-patch forwarding). `pyproject.toml` documents its deliberate exceptions — do not remove them.
   - `tools/*.py`, `tests/*.py`, `shiftwise-mock/app.py`: `sys.path` bootstrap before imports (E402).

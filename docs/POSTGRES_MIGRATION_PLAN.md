@@ -1,15 +1,15 @@
 # PostgreSQL Migration Plan & Development Handoff
 
-> Status: Phases 1–5 complete · Phase 4 delivered in PR #35 · Last updated: 2026-10-03
+> Status: Phases 1–5 complete; PostgreSQL-only runtime and tests delivered (#46, #47) · Phase 4 in PR #35 · Last updated: 2026-10-04
 
-This document serves as the complete, step-by-step engineering specification and forward handoff for migrating ShiftWise Suite from SQLite to PostgreSQL. Any future agent or engineer can pick up this roadmap and implement it phase-by-phase without ambiguity.
+This document is the engineering specification and completion record of the migration from SQLite to PostgreSQL: the problem statement, target architecture, and the phase-by-phase plan that was executed.
 
 > **Current state (2026-10-03):** Phases 1–3 and 5 are delivered in PRs #16, #17, #30 and #31. PR #34 contained the Phase 4 checklist only. PR #35 completes the Phase 4 implementation and review follow-up.
 
-> **Runtime cutover (#46, epic #44):** PostgreSQL is the only supported runtime.
-> SQLite fallback paths, database-path exports, and SQLite-only tests are removed.
-> The phase descriptions below record the migration history. Current setup is in
-> [DEVELOPMENT.md](DEVELOPMENT.md) and [ENVIRONMENT.md](ENVIRONMENT.md).
+> **Completion (epic #44):** #46 removed the SQLite runtime so the app cannot boot without
+> PostgreSQL; #47 made the test suite, CI, and gate PostgreSQL-only (per-test TRUNCATE isolation,
+> no `sqlite_only`/`pg_own_isolation` markers). The phase descriptions below are the migration record;
+> current setup lives in [DEVELOPMENT.md](DEVELOPMENT.md) and [ENVIRONMENT.md](ENVIRONMENT.md).
 
 ---
 
