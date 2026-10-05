@@ -13,6 +13,12 @@ import pytest
     [
         (None, None, "PostgreSQL is required. Set DATABASE_URL"),
         ("postgres", "", "PostgreSQL is required. Set DATABASE_URL"),
+        ("sqlite", None, "SQLite support removed — configure PostgreSQL via DATABASE_URL"),
+        (
+            "sqlite",
+            "postgresql://user:secret@127.0.0.1:1/unused",
+            "SQLite support removed — configure PostgreSQL via DATABASE_URL",
+        ),
         (None, "mysql://user:secret@127.0.0.1/scheduler", "DATABASE_URL must be a PostgreSQL URL"),
         (
             None,
