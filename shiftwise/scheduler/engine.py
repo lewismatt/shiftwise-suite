@@ -11,6 +11,7 @@ from shiftwise.domain.rules import (
     priority_key,
     shift_hours,
 )
+from shiftwise.domain.swaps import reconcile_swap_invites
 from shiftwise.notify import notify_many
 from shiftwise.scheduler.coverage import coverage_plan
 
@@ -72,6 +73,7 @@ def _begin_week(state):
         "SELECT * FROM shifts WHERE week_start=? ORDER BY id FOR NO KEY UPDATE", (state.week_start,)
     ).fetchall()
     state.shift_ids = [s["id"] for s in state.shifts]
+    reconcile_swap_invites(conn, state.shift_ids)
     return bool(state.shift_ids)
 
 
@@ -422,7 +424,7 @@ def _resolve_swaps(state):
             conn.execute(
                 "UPDATE requests SET status='approved_ok' WHERE "
                 "kind='swap' AND status='approved' AND shift_id=? "
-                "AND user_id=?",
+                "AND user_id=? AND target_user_id IS NULL",
                 (s["id"], uid),
             )
             state.notify(

@@ -15,6 +15,7 @@ from flask import (
 from shiftwise.auth import login_required
 from shiftwise.db import db, lock_shifts, lock_users, monday_of
 from shiftwise.domain.rules import priority_key
+from shiftwise.domain.swaps import reconcile_swap_invites
 from shiftwise.notify import notify
 from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
 
@@ -128,6 +129,7 @@ def unassign(shift_id, user_id):
     deleted = conn.execute(
         "DELETE FROM assignments WHERE shift_id=? AND user_id=?", (shift_id, user_id)
     ).rowcount
+    reconcile_swap_invites(conn, [shift_id])
     if deleted:
         conn.execute(
             "INSERT INTO requests (user_id, kind, shift_id, status, created_at) VALUES (?,?,?,?,?)",
@@ -211,6 +213,7 @@ def manager_assign(shift_id, user_id):
         "INSERT INTO assignments (shift_id, user_id, status) VALUES (?,?,'manager_fixed')",
         (shift_id, user_id),
     )
+    reconcile_swap_invites(conn, [shift_id])
     notify(
         conn,
         user_id,

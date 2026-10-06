@@ -28,6 +28,7 @@ from shiftwise.db import (
 )
 from shiftwise.domain.constants import DAYS
 from shiftwise.domain.rules import assignment_block_reason, valid_email
+from shiftwise.domain.swaps import reconcile_swap_invites
 from shiftwise.notify import notify
 from shiftwise.scheduler.coverage import apply_sick, coverage_plan
 from shiftwise.scheduler.debounce import enqueue_rebuild
@@ -358,6 +359,7 @@ def swap(shift_id):
                 "cover it — needs manual coverage.",
             )
         flash("Swap requested, but nobody is available to cover — the manager has been alerted.")
+    reconcile_swap_invites(conn, [shift_id])
     # commit FIRST so the rebuild sees the deletions, then rebuild
     conn.commit()
     if actor_rebuild:
@@ -699,6 +701,16 @@ def respond_to_swap(req_id):
         abort(404)
     lock_shifts(conn, [req["shift_id"], req["target_shift_id"]])
     lock_users(conn, [req["user_id"], req["target_user_id"]])
+    # A response may have waited while another response/cancellation committed.
+    # Do not let its stale snapshot resolve a newer invite on the same source.
+    req = conn.execute(
+        "SELECT * FROM requests WHERE id=? AND kind='swap' AND target_user_id=? "
+        "AND status='approved'",
+        (req_id, session["uid"]),
+    ).fetchone()
+    if not req:
+        conn.close()
+        abort(404)
     source = conn.execute("SELECT * FROM shifts WHERE id=?", (req["shift_id"],)).fetchone()
     target = conn.execute("SELECT * FROM shifts WHERE id=?", (req["target_shift_id"],)).fetchone()
     requester = conn.execute(

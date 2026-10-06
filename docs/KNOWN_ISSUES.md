@@ -249,11 +249,37 @@ traffic. Many exceed 10 seconds. Some hit the 15-second ceiling.
 
 ### M2 — Invite inconsistencies after concurrent modifications
 
-**Symptom.** Swap invites become orphaned: the assignment has `swap_invited`
-status but no matching pending request exists, or vice versa.
+**Status:** Addressed on `fix/56-57-swap-invite-consistency` (issues #56 and #57);
+awaiting draft PR review by Larry and Matthew's merge decision.
 
-**Root cause.** Concurrent unassign/accept/delete operations modify the
-assignment and request tables independently without checking each other.
+**Invariant.** Each approved coworker swap request (`kind='swap'`,
+`target_user_id IS NOT NULL`) has one `swap_invited` source assignment, and
+each marker has one such request.
+
+**Root cause.** These failures do not require concurrent writes. Deleting an
+invite's target shift superseded its request but kept the source marker.
+Deleting the invited employee removed the request but also kept the marker.
+Unassigning, overriding, calling in sick, self-swapping, or approving a switch
+could remove or replace the source marker without closing the invite.
+Responses also used request snapshots read before waiting for shift locks.
+A delayed rejection could clear the marker belonging to a newer invite.
+
+**Fix.** `reconcile_swap_invites` closes requests whose source markers were
+invalidated and returns orphaned markers to `confirmed`. Staffing and
+deletion paths call it under their existing shift locks before commit.
+Rebuilds reconcile the locked week before loading assignments.
+`respond_to_swap` re-reads the request after locking; resolved or cancelled
+requests return 404 rather than modifying another invite.
+
+**Verification.** Eight regression cases failed before the fix. The real HTTP
+`delete_vs_accept` and `unassign_vs_accept` drills both ran without skips or
+mismatches. Their audits, plus target deletion and source unassignment before
+a response, returned zero findings in both directions. Liveweek seed 9999
+(15-second ambient run) recorded zero `invite_inconsistent` findings and zero
+HTTP 5xx; unrelated day-off and workflow findings remain.
+The full gate passed: 170 pytest cases, the 13-phase gauntlet, chaos seed 42,
+liveweek seed 1788581542 (also zero invite findings and HTTP 5xx), and Compose
+validation. Ruff lint and format checks passed.
 
 ---
 
