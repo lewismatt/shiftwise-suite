@@ -388,6 +388,19 @@ def request_vacation():
         return redirect(url_for("dashboard"))
     conn = db()
     uid = session["uid"]
+    # Serialize submissions even when no vacation row exists yet. Check in a
+    # separate statement so a waiter sees the preceding submission's commit.
+    lock_users(conn, [uid])
+    overlap = conn.execute(
+        "SELECT 1 FROM requests WHERE user_id=? AND kind='vacation' "
+        "AND status IN ('approved', 'approved_ok') "
+        "AND vacation_start<=? AND vacation_end>=? LIMIT 1",
+        (uid, ve.isoformat(), vs.isoformat()),
+    ).fetchone()
+    if overlap:
+        conn.close()
+        flash("Vacation overlaps an existing vacation request.")
+        return redirect(url_for("dashboard"))
     conn.execute(
         "INSERT INTO requests (user_id, kind, vacation_start, vacation_end, created_at) "
         "VALUES (?,?,?,?,?)",
