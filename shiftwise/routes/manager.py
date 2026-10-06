@@ -16,6 +16,7 @@ from shiftwise.auth import login_required
 from shiftwise.db import db, lock_shifts, lock_users, monday_of
 from shiftwise.domain.constants import DAYS
 from shiftwise.domain.rules import assignment_block_reason
+from shiftwise.domain.swaps import reconcile_swap_invites
 from shiftwise.notify import notify
 from shiftwise.scheduler.coverage import coverage_plan
 from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
@@ -155,6 +156,7 @@ def delete_shift(shift_id):
         (shift_id, shift_id),
     )
     conn.execute("DELETE FROM shifts WHERE id=?", (shift_id,))
+    reconcile_swap_invites(conn, week_ids)
     conn.commit()
     conn.close()
     if shift:
@@ -375,6 +377,7 @@ def _approve_switch(conn, r, req_id):
                 "DELETE FROM picks WHERE user_id=? AND shift_id=?", (r["user_id"], r["shift_id"])
             )
             conn.execute("UPDATE requests SET status='approved_ok' WHERE id=?", (req_id,))
+            reconcile_swap_invites(conn, [r["shift_id"], r["target_shift_id"]])
             notify(
                 conn,
                 r["user_id"],

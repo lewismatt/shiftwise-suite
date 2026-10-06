@@ -42,6 +42,7 @@ from shiftwise.domain.rules import (
     valid_email,
     valid_phone,
 )
+from shiftwise.domain.swaps import reconcile_swap_invites
 from shiftwise.notify import notify, notify_many, send_schedule_link
 from shiftwise.routes.calendar import calendar_days
 from shiftwise.scheduler.coverage import apply_sick, coverage_plan
@@ -102,6 +103,7 @@ __all__ = [
     "assignment_block_reason",
     "priority_key",
     "unavailable_uids",
+    "reconcile_swap_invites",
     "valid_email",
     "valid_phone",
     "calendar_days",

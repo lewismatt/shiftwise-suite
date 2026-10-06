@@ -10,6 +10,7 @@ from shiftwise.domain.rules import (
     shift_hours,
     unavailable_uids,
 )
+from shiftwise.domain.swaps import reconcile_swap_invites
 from shiftwise.notify import notify
 
 
@@ -130,6 +131,7 @@ def apply_sick(conn, uid, shift_id, week=None):
     conn.execute(
         "UPDATE assignments SET status='sick' WHERE shift_id=? AND user_id=?", (shift_id, uid)
     )
+    reconcile_swap_invites(conn, [shift_id])
     notify(
         conn,
         uid,

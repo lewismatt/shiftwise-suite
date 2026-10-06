@@ -25,6 +25,7 @@ from shiftwise.db import (
     monday_of,
 )
 from shiftwise.domain.rules import valid_email, valid_phone
+from shiftwise.domain.swaps import reconcile_swap_invites
 from shiftwise.notify import notify, send_schedule_link
 from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
 
@@ -198,6 +199,7 @@ def delete_employee(user_id):
     # requests pointing at nobody.
     conn.execute("DELETE FROM requests WHERE target_user_id=?", (user_id,))
     conn.execute("DELETE FROM users WHERE id=? AND role='employee'", (user_id,))
+    reconcile_swap_invites(conn, shift_ids)
     conn.commit()
     conn.close()
     run_scheduler(monday_of(date.today()).isoformat())
