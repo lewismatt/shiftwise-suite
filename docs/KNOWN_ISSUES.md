@@ -259,7 +259,8 @@ assignment and request tables independently without checking each other.
 
 ### M3 — Duplicate vacation requests accepted (Issue #55)
 
-**Status:** FIXED on the Issue #55 branch; draft PR pending review.
+**Status:** FIXED on the Issue #55 branch (draft PR #60); awaiting Larry review
+and Matthew's merge decision.
 
 **Symptom.** drill `double_vacation` confirmed: 2 overlapping vacation
 requests for the same employee were both accepted (seed 9999).
