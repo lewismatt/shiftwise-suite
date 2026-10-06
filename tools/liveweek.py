@@ -1023,6 +1023,20 @@ def b_switch(ctx):
         return
     tgt = ctx.rng.choice(others)
     r = ctx.sess.post(f"/request/switch/{src['shift_id']}", {"target_shift": str(tgt["id"])})
+    # Issue #59: the snapshot above can go stale under concurrency (another
+    # actor deletes a shift or changes the assignment between snapshot and
+    # POST). The app's validation flashes are correct outcomes for those
+    # races, not behavior mismatches. Only flag truly unexpected results.
+    _race_flashes = (
+        "That's not one of your shifts.",
+        "Choose another shift in the same week.",
+        "Switches stay within your own house",
+    )
+    if r.flash and any(f in r.flash for f in _race_flashes):
+        # Stale snapshot race: the app validated correctly. Count the attempt,
+        # not a mismatch.
+        ctx.rec.coverage_tick("switch")
+        return
     ctx.sess.expect(r, "Switch request sent", "switch")
 
 
