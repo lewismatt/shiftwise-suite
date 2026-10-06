@@ -5,7 +5,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 import pytest
@@ -71,6 +71,78 @@ def pending():
     conn = appmod.db()
     try:
         return conn.execute("SELECT generation FROM scheduler_rebuilds").fetchone()
+    finally:
+        conn.close()
+
+
+def test_overlapping_vacation_posts_accept_only_one(pg):
+    _, _, users, _ = pg
+    start = date.today() + timedelta(days=14)
+    barrier = threading.Barrier(2)
+
+    def submit(offset):
+        client = client_for(users[0])
+        barrier.wait(timeout=10)
+        response = client.post(
+            "/request/vacation",
+            data={
+                "vac_start": (start + timedelta(days=offset)).isoformat(),
+                "vac_end": (start + timedelta(days=offset + 2)).isoformat(),
+            },
+        )
+        assert response.status_code == 302
+        with client.session_transaction() as session:
+            return [message for _, message in session.get("_flashes", [])]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        messages = list(executor.map(submit, [0, 1]))
+    assert sum(any("Vacation requested" in message for message in row) for row in messages) == 1
+    assert sum(any("overlaps" in message for message in row) for row in messages) == 1
+    conn = appmod.db()
+    try:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM requests WHERE user_id=? AND kind='vacation' "
+                "AND status IN ('approved', 'approved_ok')",
+                (users[0],),
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("status", ["approved", "approved_ok", "denied"])
+@pytest.mark.parametrize("offset", [-2, -1, 0, 1, 2, 3])
+def test_vacation_overlap_boundaries_and_status(pg, status, offset):
+    _, _, users, _ = pg
+    start = date.today() + timedelta(days=14)
+    conn = appmod.db()
+    conn.execute(
+        "INSERT INTO requests (user_id, kind, status, vacation_start, vacation_end) "
+        "VALUES (?, 'vacation', ?, ?, ?)",
+        (users[0], status, start.isoformat(), (start + timedelta(days=2)).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    client = client_for(users[0])
+    response = client.post(
+        "/request/vacation",
+        data={
+            "vac_start": (start + timedelta(days=offset)).isoformat(),
+            "vac_end": (start + timedelta(days=offset + 1)).isoformat(),
+        },
+    )
+    assert response.status_code == 302
+    blocked = status != "denied" and -1 <= offset <= 2
+    with client.session_transaction() as session:
+        messages = [message for _, message in session.get("_flashes", [])]
+    assert any("overlaps" in message for message in messages) == blocked
+    conn = appmod.db()
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM requests WHERE user_id=? AND kind='vacation'", (users[0],)
+        ).fetchone()[0] == (1 if blocked else 2)
     finally:
         conn.close()
 

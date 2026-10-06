@@ -257,13 +257,23 @@ assignment and request tables independently without checking each other.
 
 ---
 
-### M3 — Duplicate vacation requests accepted (no overlap guard)
+### M3 — Duplicate vacation requests accepted (Issue #55)
+
+**Status:** FIXED on the Issue #55 branch; draft PR pending review.
 
 **Symptom.** drill `double_vacation` confirmed: 2 overlapping vacation
 requests for the same employee were both accepted (seed 9999).
 
-**Root cause.** `request_vacation` has no guard against overlapping date
-ranges for the same employee. Two concurrent submissions both pass validation.
+**Root cause.** `request_vacation` had no overlap guard. Submissions now take
+the existing employee-row transaction lock before a separate overlap query
+and hold it through insertion and commit. Inclusive ranges conflict only
+with active requests (`approved`, `approved_ok`); denied requests and
+non-overlapping ranges do not block submission.
+
+**Verification.** The two-session barrier regression failed before the fix
+(both accepted) and passes afterward. Targeted vacation tests: 27 passed.
+The real HTTP `drill_double_vacation` with seed 9999 accepted one vacation
+and recorded zero findings. The full gate was not run for this focused fix.
 
 **Code locations:** `shiftwise/routes/employee.py:request_vacation`
 
