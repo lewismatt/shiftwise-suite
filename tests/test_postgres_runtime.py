@@ -112,6 +112,17 @@ def test_secret_file_empty_fails_fast(tmp_path, monkeypatch, content):
         _resolve_database_url()
 
 
+@pytest.mark.parametrize("content", ["s3cret\n", "s3cret\r\n", "s3cret\n\n", "s3cret\r\n\r\n"])
+def test_secret_file_strips_trailing_newlines(tmp_path, monkeypatch, content):
+    # Must match the official PostgreSQL image's file_env behavior, which
+    # strips all trailing newlines via shell command substitution.
+    _clear_db_env(monkeypatch)
+    secret = _write_secret(tmp_path, "pw", content)
+    monkeypatch.setenv("POSTGRES_PASSWORD_FILE", secret)
+    url = _resolve_database_url()
+    assert ":s3cret@" in url, f"password not normalized in {url!r}"
+
+
 def test_no_secret_file_uses_database_url_verbatim(monkeypatch):
     _clear_db_env(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "  postgresql://u:p@h:5432/d  ")
