@@ -105,8 +105,9 @@ mkdir -p secrets
 printf '%s' 'your-strong-password-here' > secrets/postgres_password
 # The app runs as UID 10001 — the file must be readable by that user,
 # otherwise the app fails to start while postgres starts fine:
-sudo chown 10001:10001 secrets/postgres_password
+# chmod first (while you still own the file), then chown:
 chmod 600 secrets/postgres_password
+sudo chown 10001:10001 secrets/postgres_password
 ```
 
 > Use `printf '%s'` (no trailing newline). The app strips trailing CR/LF
