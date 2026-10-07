@@ -14,7 +14,7 @@ from flask import (
 
 from shiftwise.auth import login_required
 from shiftwise.db import db, lock_shifts, lock_users, monday_of
-from shiftwise.domain.rules import priority_key
+from shiftwise.domain.rules import priority_key, shift_hours
 from shiftwise.domain.swaps import reconcile_swap_invites
 from shiftwise.notify import notify
 from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
@@ -209,6 +209,21 @@ def manager_assign(shift_id, user_id):
         override_day_off = True
     conn.execute("DELETE FROM picks WHERE user_id=? AND shift_id=?", (user_id, shift_id))
     conn.execute("DELETE FROM assignments WHERE shift_id=? AND user_id=?", (shift_id, user_id))
+    # Warn (don't block) if this override pushes the employee over their
+    # weekly hours cap. Manager authority is explicit; the finding in #58
+    # is that the overage was silent. Check hours specifically — the shared
+    # block-reason helper returns the first failure, which may not be hours.
+    _rows = conn.execute(
+        "SELECT s.start_time, s.end_time FROM assignments a JOIN shifts s ON s.id=a.shift_id "
+        "WHERE a.user_id=? AND s.week_start=? AND a.status NOT IN ('sick','swap_requested')",
+        (user_id, shift["week_start"]),
+    ).fetchall()
+    _cap = user["weekly_hours"] or 40
+    exceeds_hours = (
+        sum(shift_hours(r["start_time"], r["end_time"]) for r in _rows)
+        + shift_hours(shift["start_time"], shift["end_time"])
+        > _cap
+    )
     conn.execute(
         "INSERT INTO assignments (shift_id, user_id, status) VALUES (?,?,'manager_fixed')",
         (shift_id, user_id),
@@ -229,5 +244,6 @@ def manager_assign(shift_id, user_id):
         f"Override: {user['name']} placed on {shift['day']} "
         f"{shift['start_time']}-{shift['end_time']} (fixed — the "
         "auto-scheduler won't move them)."
+        + (f" Note: this puts them over their {_cap}h weekly cap." if exceeds_hours else "")
     )
     return redirect(url_for("conflicts"))
