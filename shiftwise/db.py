@@ -197,9 +197,10 @@ def _read_secret_file(path):
     """Read a Docker secret file, stripping trailing CR/LF characters.
 
     Secret files conventionally end with a newline that is not part of
-    the secret. All trailing CR and LF characters are stripped to match
-    the official PostgreSQL image's file_env behavior (which uses shell
-    command substitution, removing all trailing newlines) — otherwise
+    the secret. All trailing CR and LF characters are stripped. This matches
+    what PostgreSQL actually uses at initialization: the image's file_env
+    passes the raw bytes through, and initdb reads the first password-file
+    line stripping trailing CR/LF — otherwise
     CRLF or multi-newline files produce different passwords in the app
     and the database. Raises RuntimeError when the file cannot be read
     or holds no usable value, so a mis-mounted secret fails fast at startup.
