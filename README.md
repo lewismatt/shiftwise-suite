@@ -86,6 +86,7 @@ Comprehensive documentation is available in the [`docs/`](docs/) directory:
 - [Data Model & Storage Schema](docs/DATA_MODEL.md): PostgreSQL schema, table relationships, assignment lifecycle, and request state machines.
 - 💻 **[Development Guide](docs/DEVELOPMENT.md):** Local setup, running unit/integration tests, and using the gauntlet/chaos simulation harnesses.
 - 🚀 **[Production Deployment](docs/DEPLOYMENT.md):** Multi-container Docker Compose deployment, Caddy TLS setup, and security hardening.
+- [Go-live readiness review](docs/GO_LIVE_READINESS_REVIEW.md): Reproduced release blockers, recommended fixes, verification evidence, and staging/cutover acceptance checks.
 - ⚙️ **[Environment Variables](docs/ENVIRONMENT.md):** Complete reference of all `SHIFTWISE_*` configuration parameters.
 - ⚠️ **[Known Issues & Concurrency Backlog](docs/KNOWN_ISSUES.md):** Catalog of concurrency, database locking, and integrity issues surfaced by chaos/load testing, prioritized with reproduction seeds and fix approaches.
 - 🐘 **[PostgreSQL Migration Plan & Handoff](docs/POSTGRES_MIGRATION_PLAN.md):** Completed 5-phase migration record from SQLite to PostgreSQL; PostgreSQL is the only supported runtime.
