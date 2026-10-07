@@ -194,21 +194,21 @@ _postgres_pool_lock = threading.Lock()
 
 
 def _read_secret_file(path):
-    """Read a Docker secret file, dropping one trailing newline.
+    """Read a Docker secret file, stripping trailing CR/LF characters.
 
     Secret files conventionally end with a newline that is not part of
-    the secret. Raises RuntimeError when the file cannot be read or holds
-    no usable value, so a mis-mounted secret fails fast at startup.
+    the secret. All trailing CR and LF characters are stripped to match
+    the official PostgreSQL image's file_env behavior (which uses shell
+    command substitution, removing all trailing newlines) — otherwise
+    CRLF or multi-newline files produce different passwords in the app
+    and the database. Raises RuntimeError when the file cannot be read
+    or holds no usable value, so a mis-mounted secret fails fast at startup.
     """
     try:
         with open(path, "r", encoding="utf-8") as handle:
-            value = handle.read()
+            value = handle.read().rstrip("\r\n")
     except OSError as exc:
         raise RuntimeError(f"POSTGRES_PASSWORD_FILE points at an unreadable file: {path}") from exc
-    if value.endswith("\r\n"):
-        value = value[:-2]
-    elif value.endswith("\n"):
-        value = value[:-1]
     if not value:
         raise RuntimeError(f"POSTGRES_PASSWORD_FILE is empty: {path}")
     return value
