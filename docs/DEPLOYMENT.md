@@ -103,8 +103,15 @@ Docker secret:
 ```sh
 mkdir -p secrets
 printf '%s' 'your-strong-password-here' > secrets/postgres_password
+# The app runs as UID 10001 — the file must be readable by that user,
+# otherwise the app fails to start while postgres starts fine:
+sudo chown 10001:10001 secrets/postgres_password
 chmod 600 secrets/postgres_password
 ```
+
+> Use `printf '%s'` (no trailing newline). The app strips trailing CR/LF
+> to match the PostgreSQL image's behavior, but a clean file avoids any
+> ambiguity.
 
 Then layer the secrets override over the base compose file for every
 `docker compose` invocation:
@@ -118,10 +125,13 @@ The `postgres` service reads the password via the official image's
 `POSTGRES_PASSWORD_FILE` mechanism, and the app service reads the same secret
 at startup (`POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password`,
 see `shiftwise/db.py`), assembling its `DATABASE_URL` from `POSTGRES_USER` /
-`POSTGRES_DB`. The secret value never appears in the environment. When the
-secret is in use it takes precedence over `DATABASE_URL`; secrets mode targets
-the bundled postgres service. The `secrets/` directory is gitignored — the
-password file is never committed.
+`POSTGRES_DB` (passed through so `--env-file` and shell overrides work).
+`DATABASE_URL` is blanked in secrets mode so a stale value from `.env`
+cannot leak the password into the container environment — do not set
+`DATABASE_URL` in `.env` when using secrets mode. When the secret is in use
+it takes precedence; secrets mode targets the bundled postgres service
+(`postgres:5432`). The `secrets/` directory is gitignored — the password
+file is never committed.
 
 ---
 
