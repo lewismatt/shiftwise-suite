@@ -128,8 +128,9 @@ at startup (`POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password`,
 see `shiftwise/db.py`), assembling its `DATABASE_URL` from `POSTGRES_USER` /
 `POSTGRES_DB` (passed through so `--env-file` and shell overrides work).
 `DATABASE_URL` is blanked in secrets mode so a stale value from `.env`
-cannot leak the password into the container environment — do not set
-`DATABASE_URL` in `.env` when using secrets mode. When the secret is in use
+cannot leak into any container's environment — remove both
+`DATABASE_URL` and `POSTGRES_PASSWORD` from `.env` (and any
+`SHIFTWISE_ENV_FILE`) when using secrets mode. When the secret is in use
 it takes precedence; secrets mode targets the bundled postgres service
 (`postgres:5432`). The `secrets/` directory is gitignored — the password
 file is never committed.
