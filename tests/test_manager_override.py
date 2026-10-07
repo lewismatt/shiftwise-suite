@@ -177,3 +177,57 @@ def test_manager_override():
 
 if __name__ == "__main__":
     test_manager_override()
+
+
+def test_manager_override_hours_cap_warning():
+    """Issue #58: manager override exceeding hours cap warns but doesn't block."""
+    WEEK = appmod.monday_of(appmod.date.today()).isoformat()
+
+    conn = appmod.db()
+    try:
+        truncate_postgres_tables(conn)
+    finally:
+        conn.close()
+    appmod.init_db(seed_demo=True)
+    conn = appmod.db()
+    conn.execute("DELETE FROM shifts")
+    # Give alex a tiny 8h cap so one 8h shift hits it and a second exceeds it.
+    alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()[0]
+    conn.execute("UPDATE users SET weekly_hours=8 WHERE id=?", (alex_id,))
+    # Two 8h shifts (09:00-17:00).
+    sids = []
+    for day in ("Mon", "Tue"):
+        sids.append(
+            insert_id(
+                conn,
+                "INSERT INTO shifts (week_start, day, start_time, end_time, slots, area) "
+                "VALUES (?,?,?,?,?,?)",
+                (WEEK, day, "09:00", "17:00", 1, "front"),
+            )
+        )
+    conn.commit()
+    conn.close()
+
+    c = appmod.app.test_client()
+    c.post("/login", data={"username": "manager", "password": "manager"})
+
+    # First override: 8h assigned, cap is 8h — no warning (not over).
+    r = c.post(f"/manager/assign/{sids[0]}/{alex_id}", follow_redirects=True)
+    assert r.status_code == 200
+    assert "over their 8h weekly cap" not in r.data.decode()
+
+    # Second override: 16h total > 8h cap — warning appears, assignment still happens.
+    r = c.post(f"/manager/assign/{sids[1]}/{alex_id}", follow_redirects=True)
+    assert r.status_code == 200
+    html = r.data.decode()
+    assert "over their 8h weekly cap" in html, "expected hours-cap warning in flash"
+    conn = appmod.db()
+    try:
+        row = conn.execute(
+            "SELECT status FROM assignments WHERE shift_id=? AND user_id=?",
+            (sids[1], alex_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row and row["status"] == "manager_fixed", "override must not be blocked"
+    print("hours-cap warning test passed")
