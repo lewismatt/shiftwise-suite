@@ -23,16 +23,21 @@
 
 ## 4. Verification Standard
 
-**Tiered regimen — never run the full gate on every small change.**
+**Tiered regimen — never run the full gate on every change.**
 
 | When | Command | Cost |
 | --- | --- | --- |
 | While writing code | `pytest tests/<file>::<test>` (targeted) | seconds |
 | Wider check while writing code | `./tools/run_all.sh --fast` (pytest suite only) | ~3 min |
-| Before opening a PR or merging | `./tools/run_all.sh` (full gate) | ~6 min |
+| Cross-cutting change, suspicious failure, or explicit request | `./tools/run_all.sh` (full gate) | ~6 min |
 | Full gate without the load check | `./tools/run_all.sh --no-liveweek` | ~5 min |
 
-- Before marking any phase complete, opening a PR, or deploying, the full gate (`./tools/run_all.sh`) must pass:
+- **Default: targeted tests.** Run the tests for the code you changed. Do not run the full suite, gauntlet, or simulations for a routine change.
+- **The full gate (`./tools/run_all.sh`) is NOT required before every PR.** Run it only when:
+  - the change touches shared infrastructure (DB layer, auth, scheduler core) with cross-cutting blast radius;
+  - a targeted run shows a suspicious failure that might indicate broader breakage;
+  - explicitly requested.
+- When the full gate does run, it must pass:
   - the full collected pytest unit & integration suite passes 100% green;
   - the strict 13-phase conflict gauntlet (`tools/gauntlet.py`) completes without error — every behavioral
     check is an assertion, so a regression fails the step; the seeded chaos simulation
@@ -51,12 +56,13 @@
   informational. `tools/scenario_demo.py` is a human click-through demo, not a gate step — it leaves its database
   behind for port-5001 inspection by design. `liveweek.py` findings are structured issues instead — reports by
   default, enforced with `--strict`.
-- `./tools/run_all.sh --fast` runs the pytest suite only (for the inner development loop) and prints the full-gate reminder.
+- `./tools/run_all.sh --fast` runs the pytest suite only (for the inner development loop).
 - Dev extras (`requirements-dev.txt`: `pytest-timeout`, `pglast`) are required for a fully green suite: without `pglast` the PostgreSQL DDL parser test skips, and `pytest.ini` caps each test at 180 s so a lock wait or dialect error cannot hang a run.
 - `tools/check_entrypoints.py` (run as step `[0]` of `tools/run_all.sh`) asserts the tracked shell entrypoints (`tools/run_all.sh`, `tools/clean_artifacts.sh`, `docker-entrypoint.sh`, `shiftwise-mock/sync.sh`) keep mode `100755` via `git ls-files -s`. It catches the regression class PR #18 shipped: a dropped executable bit silently breaks the documented `./tools/run_all.sh` while every test still passes.
 - `.github/workflows/ci.yml` runs the executable-bit guard plus a `postgres` job (live PostgreSQL 16
-  service; ruff, the full pytest suite in a single process, gauntlet, and pinned-seed chaos run) on pushes to `master`
-  and on pull requests. Tests isolate shared PostgreSQL state between cases. It is not a required status check —
+  service; ruff and the pytest suite in a single process) on pushes to `master`
+  and on pull requests. The gauntlet and scenario simulations run on master pushes only, not on PRs.
+  Tests isolate shared PostgreSQL state between cases. It is not a required status check —
   blocking merges needs branch protection, which needs repo admin.
 
 ## 5. Simulation Harness & Mock Roster Coupling
