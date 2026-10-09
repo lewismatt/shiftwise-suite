@@ -3,11 +3,12 @@ name: CI
 # Two jobs:
 #   verify   -- dependency-free guard: tracked shell entrypoints keep
 #               their executable bit (./tools/check_entrypoints.py).
-#   postgres -- live PostgreSQL 16 acceptance (partially delivers Phase 5
-#               "CI Pipeline Integration"): ruff, the full pytest suite,
-#               and the quick scenario tools against a pg:16 service.
-#               Tests isolate shared PostgreSQL state and run in one process.
-#               The heavy liveweek gauntlet stays manual.
+#   postgres -- live PostgreSQL 16 acceptance: ruff and the pytest suite
+#               against a pg:16 service on every run. The gauntlet and
+#               scenario simulations run only on master pushes, not on PRs --
+#               PRs stay lean; heavy harnesses are for cross-cutting changes
+#               or explicit requests. Tests isolate shared PostgreSQL state
+#               and run in one process. The heavy liveweek gauntlet stays manual.
 # This is not a required status check: blocking merges needs branch protection,
 # which needs repo admin.
 
@@ -68,9 +69,13 @@ jobs:
       - name: Full pytest suite on PostgreSQL
         # Shared database isolation requires sequential tests in one process.
         run: python -m pytest tests/ -q -p no:xdist
+      # Heavy harnesses run on master pushes only, not on PRs.
       - name: Conflict gauntlet on PostgreSQL
+        if: github.event_name == 'push'
         run: python tools/gauntlet.py
       - name: Scenario simulation on PostgreSQL
+        if: github.event_name == 'push'
         run: python tools/scenario_demo.py
       - name: Chaos simulation (pinned seed) on PostgreSQL
+        if: github.event_name == 'push'
         run: python tools/scenario_random.py 42

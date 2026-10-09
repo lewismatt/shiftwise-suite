@@ -6,8 +6,9 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Tiered verification runner.
 #
-#   ./tools/run_all.sh                       full gate (required before opening a PR
-#                                            or merging: AGENTS.md section 4)
+#   ./tools/run_all.sh                       full gate (for cross-cutting changes,
+#                                            suspicious failures, or explicit request:
+#                                            AGENTS.md section 4)
 #   ./tools/run_all.sh --fast                 unit + integration suite only; use this
 #                                            while writing code instead of the full gate
 #   ./tools/run_all.sh --no-liveweek          full gate minus the live-week gauntlet
@@ -109,7 +110,7 @@ PYTEST_ARGS=(-p no:xdist)
 
 if [[ "${MODE}" == "fast" ]]; then
     echo "--> FAST MODE: ${PYTEST_LABEL} only."
-    echo "    The full gate must still pass before a PR or merge: ./tools/run_all.sh"
+    echo "    Full gate only needed for cross-cutting changes or explicit request: ./tools/run_all.sh"
     echo ""
     "${PYTEST}" "${PYTEST_ARGS[@]}" "${PYTEST_TARGET[@]}"
     echo ""
@@ -152,7 +153,6 @@ if [[ "${RUN_LIVEWEEK}" -eq 1 ]]; then
 else
     echo ""
     echo "--> SKIPPED: live-week concurrency gauntlet (--no-liveweek)."
-    echo "    Run the full gate before a PR or merge: ./tools/run_all.sh"
 fi
 
 echo ""
