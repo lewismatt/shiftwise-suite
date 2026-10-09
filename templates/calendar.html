@@ -53,4 +53,124 @@
   </div>
   {% endfor %}
 </div>
+
+{% if session.role == 'employee' %}
+<form method="post" action="{{ url_for('pick') }}" id="preference-form">
+  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+  <section class="card availability-section" aria-labelledby="shift-ranking-title">
+    <h2 id="shift-ranking-title" style="margin-top:4px">Preferred shifts</h2>
+    <p class="muted">Rank every shift once in each week (1 = top choice). Lower-ranked shifts are backups if your earlier choices fill.</p>
+    <div id="preference-week-pager" aria-label="Preference week navigation">
+      <button class="btn sm ghost" type="button" data-preference-week-prev aria-label="Previous week">Previous week</button>
+      <span id="preference-week-status" class="muted" aria-live="polite"></span>
+      <button class="btn sm ghost" type="button" data-preference-week-next aria-label="Next week">Next week</button>
+    </div>
+    {% for schedule_week in preference_weeks %}
+      {% set week_shifts = preference_shifts|selectattr('week_start', 'equalto', schedule_week)|list %}
+      {% if week_shifts %}
+      <div data-preference-week-panel="{{ schedule_week }}" {% if not loop.first %}hidden{% endif %}>
+        <h3 tabindex="-1">Week of {{ schedule_week }}</h3>
+        {% for day in DAYS %}
+          {% set day_shifts = week_shifts|selectattr('day', 'equalto', day)|list %}
+          {% if day_shifts %}
+          <fieldset class="availability-day shift-rank-option">
+            <legend>{{ {'Mon':'Monday','Tue':'Tuesday','Wed':'Wednesday','Thu':'Thursday','Fri':'Friday','Sat':'Saturday','Sun':'Sunday'}[day] }}</legend>
+            <div class="availability-options">
+              {% for s in day_shifts %}
+              <label class="availability-option">
+                <span><strong>{{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</strong>{% if s.note %}<span class="muted"> · {{ s.note }}</span>{% endif %}</span>
+                <select name="rank_{{ s.id }}" aria-label="Rank {{ schedule_week }} {{ day }} shift at {{ s.start_time|clock_time(time_format) }}">
+                  <option value="" disabled {% if s.id not in preference_picks %}selected{% endif %}>Choose 1–{{ week_shifts|length }}</option>
+                  {% for rank in range(1, week_shifts|length + 1) %}
+                    <option value="{{ rank }}" {% if preference_picks.get(s.id) == rank %}selected{% endif %}>{{ rank }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              {% endfor %}
+            </div>
+          </fieldset>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endfor %}
+  </section>
+  <section class="card availability-section" aria-labelledby="availability-title">
+    <h2 id="availability-title" style="margin-top:4px">Availability to cover</h2>
+    <p class="muted">Select the extra shifts you can cover if needed. Unchecked shifts are not offered to you as coverage options.</p>
+    {% for schedule_week in preference_weeks %}
+      {% set week_shifts = preference_shifts|selectattr('week_start', 'equalto', schedule_week)|list %}
+      {% if week_shifts %}
+      <h3>Week of {{ schedule_week }}</h3>
+      {% for day in DAYS %}
+        {% set day_shifts = week_shifts|selectattr('day', 'equalto', day)|list %}
+        {% if day_shifts %}
+        <fieldset class="availability-day">
+          <legend>{{ {'Mon':'Monday','Tue':'Tuesday','Wed':'Wednesday','Thu':'Thursday','Fri':'Friday','Sat':'Saturday','Sun':'Sunday'}[day] }}</legend>
+          <div class="availability-options">
+            {% for s in day_shifts %}
+            <label class="availability-option">
+              <input type="hidden" name="cover_{{ s.id }}" value="no">
+              <input type="checkbox" name="cover_{{ s.id }}" value="yes" {% if cover_prefs.get(s.id, 1) %}checked{% endif %}>
+              <span><strong>{{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</strong>{% if s.note %}<span class="muted"> · {{ s.note }}</span>{% endif %}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        {% endif %}
+      {% endfor %}
+      {% endif %}
+    {% endfor %}
+  </section>
+  <p><button class="btn">Save my schedule preferences</button>
+  <span class="muted">Shifts are assigned automatically by seniority and full-time priority.</span></p>
+</form>
+<script>
+(() => {
+  const form = document.getElementById('preference-form');
+  const pager = document.getElementById('preference-week-pager');
+  if (!form || !pager) return;
+  const panels = Array.from(form.querySelectorAll('[data-preference-week-panel]'));
+  const previous = pager.querySelector('[data-preference-week-prev]');
+  const next = pager.querySelector('[data-preference-week-next]');
+  const status = document.getElementById('preference-week-status');
+  let active = 0;
+  function showWeek(index, moveFocus = false) {
+    active = Math.max(0, Math.min(index, panels.length - 1));
+    panels.forEach((panel, i) => { panel.hidden = i !== active; });
+    previous.disabled = active === 0;
+    next.disabled = active === panels.length - 1;
+    status.textContent = `Week ${active + 1} of ${panels.length}: ${panels[active].dataset.preferenceWeekPanel}`;
+    if (moveFocus) panels[active].querySelector('h3').focus();
+  }
+  previous.addEventListener('click', () => showWeek(active - 1, true));
+  next.addEventListener('click', () => showWeek(active + 1, true));
+  form.addEventListener('submit', event => {
+    for (let i = 0; i < panels.length; i += 1) {
+      const selects = Array.from(panels[i].querySelectorAll('select[name^="rank_"]'));
+      const values = selects.map(select => select.value);
+      const duplicate = values.find((value, index) => value && values.indexOf(value) !== index);
+      const invalidIndex = values.findIndex(value => !value || (duplicate && value === duplicate));
+      if (invalidIndex !== -1) {
+        event.preventDefault();
+        showWeek(i);
+        const select = selects[invalidIndex];
+        select.setCustomValidity(duplicate && select.value === duplicate
+          ? 'Each shift in this week needs a different rank.'
+          : 'Choose a rank for every shift in this week.');
+        select.focus();
+        select.reportValidity();
+        return;
+      }
+    }
+  });
+  form.querySelectorAll('select[name^="rank_"]').forEach(select => {
+    select.addEventListener('change', () => {
+      form.querySelectorAll('select[name^="rank_"]').forEach(rank => rank.setCustomValidity(''));
+    });
+  });
+  if (panels.length) showWeek(0);
+})();
+</script>
+{% endif %}
 {% endblock %}

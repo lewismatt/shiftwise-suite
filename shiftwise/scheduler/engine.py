@@ -233,13 +233,11 @@ def _run_assignment_rounds(state):
     # shifts of their own area: a FOH employee's picks on BOH
     # shifts (and vice versa) are ignored — the two houses run as
     # two separate schedules.
-    def priority(uid):
-        return priority_key(users[uid])
-
-    my_area = {uid: users[uid]["station"] for uid in users}
+    def priority(uid, sid):
+        return priority_key(users[uid], area_of[sid])
 
     def eligible(uid, sid):
-        return sid in area_of and my_area[uid] == area_of[sid]
+        return sid in area_of and users[uid]["station"] in (area_of[sid], "both")
 
     max_rank = max((max(prefs) for prefs in user_prefs.values()), default=0)
     new_assignments = []
@@ -253,7 +251,7 @@ def _run_assignment_rounds(state):
                     continue
                 if not eligible(uid, sid):
                     continue  # FOH pick on a BOH shift (or vice versa)
-                claimants.append((priority(uid), uid, sid))
+                claimants.append((priority(uid, sid), uid, sid))
         claimants.sort()
         for _, uid, sid in claimants:
             if sid in [a[0] for a in user_assignments[uid]]:

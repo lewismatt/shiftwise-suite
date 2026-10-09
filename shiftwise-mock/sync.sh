@@ -20,7 +20,7 @@ if [[ "${1:-}" == "--reseed" ]]; then
     export SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD="${SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD:-testbootstrap123}"
     cd ..
     "$python_bin" - <<'PY'
-from datetime import date
+from datetime import date, timedelta
 
 try:
     import app
@@ -28,12 +28,13 @@ try:
 
     app.init_db(seed_demo=True)
     employees, days, picks = mock_seed.seed(app, force=True)
-    week = mock_seed.monday_of(date.today()).isoformat()
-    app.run_scheduler(week)
+    week0 = mock_seed.monday_of(date.today())
+    for offset in (0, 7):
+        app.run_scheduler((week0 + timedelta(days=offset)).isoformat())
 except RuntimeError as exc:
     raise SystemExit(str(exc)) from None
 print(f"mock database seeded: {employees} employees (FOH+BOH), "
-      f"{days} days/house, {picks} pre-seeded picks")
+      f"{days} days/house, {picks} pre-seeded picks across two weeks")
 PY
     echo "mock database reseeded successfully"
 else

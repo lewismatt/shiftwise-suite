@@ -1,34 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">My Schedule</h1>
-<p class="muted" style="margin-bottom:20px">Week of {{ week }}</p>
-
-<h2>Notifications</h2>
-{% if notifs | selectattr('read', 'equalto', false) | list %}
-<form method="post" action="{{ url_for('read_notifications') }}">
-  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-  <button type="submit">Mark all as read</button>
-</form>
-{% endif %}
-{% for n in notifs %}
-  <div class="notif {{ 'unread' if not n.read }} {{ n.kind }}">
-    {{ n.message }}
-    <div class="when">{{ n.created_at }}</div>
-  </div>
-{% else %}
-  <p class="muted">No notifications yet.</p>
-{% endfor %}
-
-<h2>This week's shifts</h2>
 {% if session.role == 'employee' %}
-<p class="muted" style="margin-bottom:14px">You're on the <strong>{{ 'front of house' if my_station == 'front' else 'back of house' }}</strong> schedule — you only see and rank shifts for your own house.</p>
-<form method="post" action="{{ url_for('pick') }}">
-<input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+<div class="dashboard-heading">
+  <div>
+    <h1 class="page-title">My schedule</h1>
+    <p class="muted">Current week: {{ schedule_weeks[0] }} · Next week: {{ schedule_weeks[1] }}</p>
+  </div>
+  <a class="btn" href="{{ url_for('calendar_view') }}">View calendar</a>
+</div>
+<div class="dashboard-stats" aria-label="Schedule summary">
+  <div class="dashboard-stat" data-metric="assigned-shifts"><span class="dashboard-stat-label">Assigned shifts</span><strong>{{ assigned_this_week }}</strong></div>
+  <div class="dashboard-stat" data-metric="hours-this-week"><span class="dashboard-stat-label">Hours this week</span><strong>{{ hours_this_week|round(1) }}</strong></div>
+  <div class="dashboard-stat" data-metric="house"><span class="dashboard-stat-label">House</span><strong>{{ 'Both' if my_station == 'both' else ('Front' if my_station == 'front' else 'Back') }}</strong></div>
+</div>
+<h2>Your upcoming shifts</h2>
+<p class="muted" style="margin-bottom:14px">{% if my_station == 'both' %}You're scheduled for both <strong>front of house (FOH)</strong> and <strong>back of house (BOH)</strong> shifts.{% else %}You're on the <strong>{{ 'front of house (FOH)' if my_station == 'front' else 'back of house (BOH)' }}</strong> schedule.{% endif %}</p>
 <div class="table-wrap">
 <table class="shifts-table">
-  <tr><th>Day</th><th>Time</th><th>Staffed</th><th>Status / your pick</th></tr>
-  {% for s in shifts %}
-  <tr>
+  <tr><th>Week of</th><th>Day</th><th>Time</th><th>Staffed</th><th>Status / your pick</th></tr>
+  {% for s in shifts if s.id in my_assignments %}
+  <tr data-schedule-shift="{{ s.id }}">
+    <td data-label="Week">{{ s.week_start }}</td>
     <td data-label="Day"><strong>{{ {'Mon':'Monday','Tue':'Tuesday','Wed':'Wednesday','Thu':'Thursday','Fri':'Friday','Sat':'Saturday','Sun':'Sunday'}[s.day] }}</strong>{% if s.note %} <span class="muted">· {{ s.note }}</span>{% endif %}</td>
     <td data-label="Time"><span class="tag dim">{{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</span></td>
     <td data-label="Staffed">
@@ -55,8 +47,8 @@
         {% else %}
           <span class="tag ok">scheduled</span>
           <div style="display:inline-flex; gap:6px; flex-wrap:wrap; margin-top:4px">
-            <button class="btn sm ghost" formaction="{{ url_for('swap', shift_id=s.id) }}" formmethod="post">Request swap</button>
-            <button class="btn sm ghost" formaction="{{ url_for('request_sick', shift_id=s.id) }}" formmethod="post">Call out sick</button>
+            <form method="post" action="{{ url_for('swap', shift_id=s.id) }}"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><button class="btn sm ghost">Request swap</button></form>
+            <form method="post" action="{{ url_for('request_sick', shift_id=s.id) }}"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><button class="btn sm ghost">Call out sick</button></form>
           </div>
         {% endif %}
       </td>
@@ -64,59 +56,12 @@
       <td data-label="Status"><span class="tag dim">open to picks</span></td>
     {% endif %}
   </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No shifts are assigned to you yet. Your schedule will appear here when shifts are posted.</td></tr>
   {% endfor %}
 </table>
 </div>
-<section class="card availability-section" aria-labelledby="shift-ranking-title">
-  <h2 id="shift-ranking-title" style="margin-top:4px">Rank your preferred shifts</h2>
-  <p class="muted">Rank every shift once (1 = top choice). Lower-ranked shifts are backups if your earlier choices fill.</p>
-  {% for day in DAYS %}
-    {% set day_shifts = shifts|selectattr('day', 'equalto', day)|list %}
-    {% if day_shifts %}
-    <fieldset class="availability-day shift-rank-option">
-      <legend>{{ {'Mon':'Monday','Tue':'Tuesday','Wed':'Wednesday','Thu':'Thursday','Fri':'Friday','Sat':'Saturday','Sun':'Sunday'}[day] }}</legend>
-      <div class="availability-options">
-        {% for s in day_shifts %}
-        <label class="availability-option">
-          <span><strong>{{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</strong>{% if s.note %}<span class="muted"> · {{ s.note }}</span>{% endif %}</span>
-          <select name="rank_{{ s.id }}" aria-label="Rank {{ day }} shift at {{ s.start_time|clock_time(time_format) }}" required>
-            <option value="" disabled {% if s.id not in my_picks %}selected{% endif %}>Choose 1–{{ shifts|length }}</option>
-            {% for rank in range(1, shifts|length + 1) %}
-              <option value="{{ rank }}" {% if my_picks.get(s.id) == rank %}selected{% endif %}>{{ rank }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        {% endfor %}
-      </div>
-    </fieldset>
-    {% endif %}
-  {% endfor %}
-</section>
-<section class="card availability-section" aria-labelledby="availability-title">
-  <h2 id="availability-title" style="margin-top:4px">Availability to cover</h2>
-  <p class="muted">Select the extra shifts you can cover if needed. Unchecked shifts are not offered to you as coverage options.</p>
-  {% for day in DAYS %}
-    {% set day_shifts = shifts|selectattr('day', 'equalto', day)|list %}
-    {% if day_shifts %}
-    <fieldset class="availability-day">
-      <legend>{{ {'Mon':'Monday','Tue':'Tuesday','Wed':'Wednesday','Thu':'Thursday','Fri':'Friday','Sat':'Saturday','Sun':'Sunday'}[day] }}</legend>
-      <div class="availability-options">
-        {% for s in day_shifts %}
-        <label class="availability-option">
-          <input type="hidden" name="cover_{{ s.id }}" value="no">
-          <input type="checkbox" name="cover_{{ s.id }}" value="yes" {% if cover_prefs.get(s.id, 1) %}checked{% endif %}>
-          <span><strong>{{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</strong>{% if s.note %}<span class="muted"> · {{ s.note }}</span>{% endif %}</span>
-        </label>
-        {% endfor %}
-      </div>
-    </fieldset>
-    {% endif %}
-  {% endfor %}
-</section>
-<p><button class="btn">Save my schedule preferences</button>
-<span class="muted">Shifts are assigned automatically by seniority and full-time priority.</span></p>
-</form>
-
+<p class="dashboard-note">Use the calendar to review your schedule and update preferred shifts or coverage availability.</p>
 <div class="dashboard-action-cards">
   <div class="card action-card">
     <h2>Request a day off</h2>
@@ -143,51 +88,29 @@
     <p class="muted">Frees your shifts in the selected range while the manager reviews the request.</p>
   </div>
   <div class="card action-card">
-    <h2>Switch a shift</h2>
-    {% if my_assignments %}
-    <form method="post" action="" id="switch-form" class="action-form"
-          onsubmit="this.action = '/request/switch/' + this.elements['my_shift'].value">
-      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-      <div class="field-row">
-      <select name="my_shift" aria-label="My shift to switch">
-        {% for s in shifts %}{% if s.id in my_assignments and my_assignments[s.id] not in ('sick','swap_requested','swap_invited') %}
-        <option value="{{ s.id }}">{{ s.day }} {{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }} (mine)</option>
-        {% endif %}{% endfor %}
-      </select>
-      <span class="muted" style="text-align:center">for</span>
-      <select name="target_shift" aria-label="Target shift">
-        {% for s in shifts %}{% if s.id not in my_assignments %}
-        <option value="{{ s.id }}">{{ s.day }} {{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</option>
-        {% endif %}{% endfor %}
-      </select>
-      <button class="btn sm ghost">Request switch</button>
-      </div>
-    </form>
-    {% else %}
-    <p class="muted">No shifts to switch yet.</p>
-    {% endif %}
-  </div>
-  <div class="card action-card">
     <h2>Request an employee swap</h2>
-    {% if coworker_shifts and my_swappable_shifts %}
-    <form method="post" action="{{ url_for('request_employee_swap') }}" class="action-form">
+    {% if swap_weeks %}
+    {% for schedule_week in swap_weeks %}
+    <h3>Week of {{ schedule_week }}</h3>
+    <form method="post" action="{{ url_for('request_employee_swap') }}" class="action-form" data-kind="swap" data-week="{{ schedule_week }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <div class="field-row" style="flex-direction:column; align-items:stretch">
-        <label class="muted" for="swap-source" style="font-size:12px">Your shift</label>
-        <select name="shift_id" id="swap-source" required>
-          {% for s in my_swappable_shifts %}
-          <option value="{{ s.id }}">{{ s.day }} {{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</option>
+        <label class="muted" for="swap-source-{{ schedule_week }}" style="font-size:12px">Your shift</label>
+        <select name="shift_id" id="swap-source-{{ schedule_week }}" required>
+          {% for s in swap_sources_by_week[schedule_week] %}
+          <option value="{{ s.id }}" data-week="{{ s.week_start }}">{{ s.week_start }} · {{ s.day }} {{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</option>
           {% endfor %}
         </select>
-        <label class="muted" for="swap-target" style="font-size:12px">Coworker’s shift</label>
-        <select name="target_assignment" id="swap-target" required>
-          {% for s in coworker_shifts %}
-          <option value="{{ s.user_id }}:{{ s.id }}">{{ s.name }} — {{ s.day }} {{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</option>
+        <label class="muted" for="swap-target-{{ schedule_week }}" style="font-size:12px">Coworker’s shift</label>
+        <select name="target_assignment" id="swap-target-{{ schedule_week }}" required>
+          {% for s in coworker_shifts_by_week[schedule_week] %}
+          <option value="{{ s.user_id }}:{{ s.id }}" data-week="{{ s.week_start }}">{{ s.week_start }} · {{ s.name }} — {{ s.day }} {{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</option>
           {% endfor %}
         </select>
         <button class="btn sm ghost" style="margin-top:4px">Send swap request</button>
       </div>
     </form>
+    {% endfor %}
     {% else %}
     <p class="muted">A swap is available when you and a coworker are assigned shifts in the same week.</p>
     {% endif %}
@@ -195,6 +118,9 @@
   </div>
 </div>
 {% else %}
+<h1 class="page-title">My Schedule</h1>
+<p class="muted" style="margin-bottom:20px">Week of {{ week }}</p>
+<h2>This week's shifts</h2>
 <div class="card">
   <p class="muted" style="margin:0">Managers view the schedule here — employees rank their days on their own dashboards.</p>
 </div>

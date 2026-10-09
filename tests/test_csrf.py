@@ -113,8 +113,20 @@ class CsrfTests(unittest.TestCase):
         employee = appmod.app.test_client()
         self.login(employee, "alex")
         dashboard = employee.get("/").data.decode()
-        self.assertIn("switch-form", dashboard)
+        self.assertNotIn("switch-form", dashboard)
+        self.assertIn("Request an employee swap", dashboard)
         self.assertGreater(self.assert_forms_are_protected(employee, "/"), 0)
+
+    def test_notifications_navigation_is_present_in_desktop_and_mobile_menus(self):
+        for username in ("alex", "manager"):
+            client = appmod.app.test_client()
+            self.login(client, username)
+            response = client.get("/")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data.decode().count('href="/notifications"'), 2)
+
+        logged_out = appmod.app.test_client().get("/login").data.decode()
+        self.assertNotIn('href="/notifications"', logged_out)
 
     def test_employee_swap_forms_carry_a_token(self):
         """The self-service swap form and the swap-response form are protected."""
@@ -153,6 +165,9 @@ class CsrfTests(unittest.TestCase):
         employee = appmod.app.test_client()
         self.login(employee, "alex")
         dashboard = employee.get("/").data.decode()
+        self.assertNotIn("switch-form", dashboard)
+        self.assertNotIn("Switch a shift", dashboard)
+        self.assertIn("Request an employee swap", dashboard)
         self.assertIn("request/swap", dashboard, "the swap-request form did not render")
         self.assertGreater(self.assert_forms_are_protected(employee, "/"), 0)
 

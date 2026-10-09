@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1 class="page-title">Roster</h1>
-<p class="muted" style="margin-bottom:18px">Auto-lineup order: front of house before back of house, then full-time first (in order of hire date, earliest = most senior), then part-time the same way. Each employee's station decides which of the two schedules they belong to — FOH staff are never scheduled onto BOH shifts or vice versa. The scheduler never schedules anyone past their cap.</p>
+<p class="muted" style="margin-bottom:18px">Assign employees to FOH, BOH, or both houses. Employees set to both can rank and be scheduled for shifts in either area. The scheduler never schedules anyone past their cap.</p>
 <p class="muted">Add employee contact details, save the roster, then use Send link. Text numbers must use international format, such as +15551234567. Delivery requires the app's public HTTPS URL and configured SMTP and/or Twilio settings.</p>
 
 <div class="card roster-add" style="margin-bottom:18px">
@@ -14,6 +14,7 @@
     <input name="email" type="email" placeholder="Email (optional)">
     <input name="phone" type="tel" placeholder="Phone +country code (optional)">
     <select name="employment_type"><option value="full_time">Full-time</option><option value="part_time">Part-time</option></select>
+    <select name="station" aria-label="House"><option value="front">Front of house</option><option value="back">Back of house</option><option value="both">Both FOH and BOH</option></select>
     <input name="hired_on" type="date" aria-label="Hire date">
     <input name="weekly_hours" type="number" value="40" min="1" max="168" aria-label="Weekly hours cap" required>
     <button class="btn">Add employee</button>
@@ -33,6 +34,7 @@
       <select form="roster-save" name="station_{{ e.id }}">
         <option value="front" {% if e.station == 'front' %}selected{% endif %}>Front of house</option>
         <option value="back" {% if e.station == 'back' %}selected{% endif %}>Back of house</option>
+        <option value="both" {% if e.station == 'both' %}selected{% endif %}>Both FOH and BOH</option>
       </select>
     </td>
     <td data-label="Employment type">

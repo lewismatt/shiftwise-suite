@@ -1,6 +1,6 @@
 """Shared canonical mock seeding for the ShiftWise environment.
 
-Keeps the fake roster and the Mon-Sun demo week in one place.
+Keeps the fake roster and the Mon-Sun demo schedule in one place.
 Roster is split by house: 7 front-of-house and 7 back-of-house employees.
 FOH and BOH are two separate schedules — FOH staff are never scheduled
 onto BOH shifts and vice versa.
@@ -68,15 +68,17 @@ def monday_of(d):
     return d - timedelta(days=d.weekday())
 
 
-def seed(appmod, force=False):
-    """Wipe and reseed appmod's DB with the mock roster + full demo week.
+def seed(appmod, force=False, week_count=2):
+    """Wipe and reseed appmod's DB with the mock roster and requested week count.
 
-    Every employee also gets pre-seeded picks (full 21-shift ranking) so the
+    Every employee gets pre-seeded picks (full 21-shift ranking per week) so the
     site is immediately testable without manual input.
 
     Refuses to wipe a non-empty database unless force=True, so an accidental
     call can never destroy real data.
     """
+    if not isinstance(week_count, int) or week_count < 1:
+        raise ValueError("week_count must be a positive integer")
     conn = appmod.db()
     if not force:
         existing = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
@@ -106,30 +108,36 @@ def seed(appmod, force=False):
             "UPDATE users SET password=? WHERE username=?",
             (appmod.generate_password_hash(username), username),
         )
-    week = monday_of(date.today()).isoformat()
+    week0 = monday_of(date.today())
+    weeks = [(week0 + timedelta(days=7 * offset)).isoformat() for offset in range(week_count)]
     conn.executemany(
         "INSERT INTO shifts (week_start, day, start_time, end_time, slots, note, area) "
         "VALUES (?,?,?,?,?,?,?)",
-        [(week, d, s, e, n, note, area) for area, d, s, e, n, note in DEMO_SHIFTS],
+        [
+            (week, d, s, e, n, note, area)
+            for week in weeks
+            for area, d, s, e, n, note in DEMO_SHIFTS
+        ],
     )
 
     # PostgreSQL returns TIME columns as datetime.time, SQLite as TEXT;
     # normalize to HH:MM so the lookup key matches SHIFT_WINDOWS.
     shift_ids = {
-        (r["area"], r["day"], str(r["start_time"])[:5]): r["id"]
-        for r in conn.execute("SELECT id, day, area, start_time FROM shifts")
+        (r["week_start"], r["area"], r["day"], str(r["start_time"])[:5]): r["id"]
+        for r in conn.execute("SELECT id, week_start, day, area, start_time FROM shifts")
     }
     for username, prefs in PREFS.items():
         uid = conn.execute("SELECT id, station FROM users WHERE username=?", (username,)).fetchone()
-        for day, day_rank in prefs.items():
-            # employees only pick shifts in their own house
-            for window_rank, (start, _end, _label) in enumerate(SHIFT_WINDOWS, start=1):
-                sid = shift_ids[(uid["station"], day, start)]
-                rank = (day_rank - 1) * len(SHIFT_WINDOWS) + window_rank
-                conn.execute(
-                    "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)",
-                    (uid["id"], sid, rank),
-                )
+        for week in weeks:
+            for day, day_rank in prefs.items():
+                # Keep each week's ranking independent for its own scheduler.
+                for window_rank, (start, _end, _label) in enumerate(SHIFT_WINDOWS, start=1):
+                    sid = shift_ids[(week, uid["station"], day, start)]
+                    rank = (day_rank - 1) * len(SHIFT_WINDOWS) + window_rank
+                    conn.execute(
+                        "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?)",
+                        (uid["id"], sid, rank),
+                    )
 
     conn.commit()
     n = conn.execute("SELECT COUNT(*) c FROM users WHERE role='employee'").fetchone()["c"]
@@ -138,5 +146,7 @@ def seed(appmod, force=False):
     conn.close()
     assert n == 14, f"expected 14 employees, got {n}"
     assert d == 7, f"expected Mon-Sun demo week, got {d} days"
-    assert p == sum(len(v) for v in PREFS.values()) * len(SHIFT_WINDOWS), "picks not fully seeded"
+    assert p == week_count * sum(len(v) for v in PREFS.values()) * len(SHIFT_WINDOWS), (
+        f"picks not fully seeded for {week_count} weeks"
+    )
     return n, d, p

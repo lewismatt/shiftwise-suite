@@ -29,13 +29,18 @@ manager_bp = Blueprint("manager", __name__)
 @login_required(role="manager")
 def manager():
     conn = db()
-    week = monday_of(date.today()).isoformat()
-    shifts = conn.execute("SELECT * FROM shifts WHERE week_start=? ORDER BY id", (week,)).fetchall()
+    week0 = monday_of(date.today())
+    week = week0.isoformat()
+    schedule_weeks = [week, (week0 + timedelta(days=7)).isoformat()]
+    shifts = conn.execute(
+        "SELECT * FROM shifts WHERE week_start IN (?,?) ORDER BY week_start, id",
+        schedule_weeks,
+    ).fetchall()
     picks = conn.execute(
-        "SELECT p.rank, u.name, s.day, s.start_time, s.end_time FROM picks p "
+        "SELECT p.rank, u.name, s.day, s.start_time, s.end_time, s.week_start FROM picks p "
         "JOIN users u ON u.id=p.user_id JOIN shifts s ON s.id=p.shift_id "
-        "WHERE s.week_start=? ORDER BY u.name, p.rank",
-        (week,),
+        "WHERE s.week_start IN (?,?) ORDER BY s.week_start, u.name, p.rank",
+        schedule_weeks,
     ).fetchall()
     assigned = defaultdict(list)
     label = {
@@ -67,6 +72,7 @@ def manager():
         DAYS=DAYS,
         assigned=assigned,
         week=week,
+        schedule_weeks=schedule_weeks,
         front_shifts=front_shifts,
         back_shifts=back_shifts,
         unassigned=[u["name"] for u in unassigned],
@@ -93,7 +99,20 @@ def add_shift():
         flash("Choose a day, an end time after the start, and 1–10 slots.")
         return redirect(url_for("manager"))
     conn = db()
-    week = monday_of(date.today()).isoformat()
+    week0 = monday_of(date.today())
+    allowed_weeks = {week0, week0 + timedelta(days=7)}
+    week_text = request.form.get("week_start", week0.isoformat()).strip()
+    try:
+        requested_week = date.fromisoformat(week_text)
+    except ValueError:
+        conn.close()
+        flash("Choose a valid Monday in the two-week scheduling window.")
+        return redirect(url_for("manager.manager"))
+    if requested_week not in allowed_weeks:
+        conn.close()
+        flash("Choose the current or next Monday for this shift.")
+        return redirect(url_for("manager.manager"))
+    week = requested_week.isoformat()
     start_text = start_time.strftime("%H:%M")
     end_text = end_time.strftime("%H:%M")
     note = request.form.get("note") or None
@@ -112,7 +131,7 @@ def add_shift():
             (week, day, start_text, end_text, slots, note, shift_area),
         )
         for emp in conn.execute(
-            "SELECT id FROM users WHERE role='employee' AND station=?", (shift_area,)
+            "SELECT id FROM users WHERE role='employee' AND station IN (?, 'both')", (shift_area,)
         ):
             notify(
                 conn,

@@ -76,7 +76,20 @@ def create_app(config_class=Config):
                 conn.close()
         if user and user["time_format"] in ("12h", "24h"):
             time_format = user["time_format"]
-        return {"time_format": time_format}
+        unread_notifications = 0
+        if session.get("uid"):
+            conn = db()
+            try:
+                unread_notifications = conn.execute(
+                    "SELECT COUNT(*) FROM notifications WHERE user_id=? AND read=FALSE",
+                    (session["uid"],),
+                ).fetchone()[0]
+            finally:
+                conn.close()
+        return {
+            "time_format": time_format,
+            "unread_notifications": unread_notifications,
+        }
 
     return flask_app
 

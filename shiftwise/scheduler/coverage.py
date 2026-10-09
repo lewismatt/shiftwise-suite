@@ -17,7 +17,8 @@ from shiftwise.notify import notify
 def coverage_plan(conn, week, out_shift_id, out_uid, *, _shift_locked=False):
     """Pick the next-in-line coverer for a shift its holder is leaving.
 
-    Only considers coverers whose station matches the shift's area
+    Only considers coverers whose station matches the shift's area or is
+    configured for both houses
     (front-of-house shifts are covered by front staff, back-of-house
     shifts by back staff) — a FOH/BOH employee is never pulled across.
 
@@ -41,7 +42,8 @@ def coverage_plan(conn, week, out_shift_id, out_uid, *, _shift_locked=False):
     if staffed >= shift["slots"]:
         return None
     employees = conn.execute(
-        "SELECT * FROM users WHERE role='employee' AND station=? ORDER BY id", (shift["area"],)
+        "SELECT * FROM users WHERE role='employee' AND station IN (?, 'both') ORDER BY id",
+        (shift["area"],),
     ).fetchall()
     # current week hours + working days for every employee, excluding the
     # shift being covered (its holder's hours leave with them) and any
@@ -99,7 +101,10 @@ def coverage_plan(conn, week, out_shift_id, out_uid, *, _shift_locked=False):
         )
         if r["user_id"] != out_uid
     }
-    for u in sorted((u for u in employees if u["id"] in picker_ids), key=priority_key):
+    for u in sorted(
+        (u for u in employees if u["id"] in picker_ids),
+        key=lambda u: priority_key(u, shift["area"]),
+    ):
         if can_cover(u):
             return u["id"]
     # 2. fall back: least-loaded employee with room

@@ -91,27 +91,71 @@ def calendar_view():
     current_user = conn.execute("SELECT station FROM users WHERE id=?", (uid,)).fetchone()
     area = request.args.get("area")
     if area not in ("front", "back"):
-        area = current_user["station"] if current_user else "front"
+        area = (
+            current_user["station"]
+            if current_user and current_user["station"] in ("front", "back")
+            else "front"
+        )
     employees = []
     if session["role"] == "manager":
         employees = conn.execute(
-            "SELECT id, name FROM users WHERE role='employee' AND station=? ORDER BY name", (area,)
+            "SELECT id, name FROM users WHERE role='employee' AND station IN (?, 'both') ORDER BY name",
+            (area,),
         ).fetchall()
         req = request.args.get("user_id", "")
         if req.isdigit():
             row = conn.execute(
-                "SELECT id FROM users WHERE id=? AND role='employee' AND station=?",
+                "SELECT id FROM users WHERE id=? AND role='employee' AND station IN (?, 'both')",
                 (int(req), area),
             ).fetchone()
             if row:
                 uid = row["id"]
     view_user = conn.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
     days = calendar_days(conn, week, uid, area)
+    preference_weeks = [monday_of(date.today()).isoformat()]
+    preference_weeks.append(
+        (date.fromisoformat(preference_weeks[0]) + timedelta(days=7)).isoformat()
+    )
+    preference_shifts = []
+    preference_picks = {}
+    cover_prefs = {}
+    if session["role"] == "employee":
+        station = current_user["station"] if current_user else "front"
+        areas = ("front", "back") if station == "both" else (station,)
+        placeholders = ",".join("?" for _ in areas)
+        week_placeholders = ",".join("?" for _ in preference_weeks)
+        preference_shifts = conn.execute(
+            f"SELECT * FROM shifts WHERE week_start IN ({week_placeholders}) "
+            f"AND area IN ({placeholders}) ORDER BY week_start, id",
+            (*preference_weeks, *areas),
+        ).fetchall()
+        preference_picks = {
+            row["shift_id"]: row["rank"]
+            for row in conn.execute(
+                "SELECT p.shift_id, p.rank FROM picks p JOIN shifts s ON s.id=p.shift_id "
+                f"WHERE p.user_id=? AND s.week_start IN ({week_placeholders})",
+                (session["uid"], *preference_weeks),
+            )
+        }
+        cover_prefs = {
+            row["shift_id"]: row["willing"]
+            for row in conn.execute(
+                "SELECT cp.shift_id, cp.willing FROM coverage_preferences cp "
+                "JOIN shifts s ON s.id=cp.shift_id "
+                f"WHERE cp.user_id=? AND s.week_start IN ({week_placeholders})",
+                (session["uid"], *preference_weeks),
+            )
+        }
     conn.close()
     d = date.fromisoformat(week)
     return render_template(
         "calendar.html",
         days=days,
+        DAYS=DAYS,
+        preference_weeks=preference_weeks,
+        preference_shifts=preference_shifts,
+        preference_picks=preference_picks,
+        cover_prefs=cover_prefs,
         week=week,
         view_name=view_user["name"] if view_user else session.get("name", ""),
         employees=employees,

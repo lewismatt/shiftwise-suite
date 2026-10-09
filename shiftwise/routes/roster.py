@@ -3,7 +3,7 @@
 import os
 import smtplib
 import urllib.error
-from datetime import date
+from datetime import date, timedelta
 
 from flask import (
     Blueprint,
@@ -32,6 +32,11 @@ from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
 roster_bp = Blueprint("roster", __name__)
 
 
+def _schedule_horizon():
+    current_week = monday_of(date.today())
+    return (current_week.isoformat(), (current_week + timedelta(days=7)).isoformat())
+
+
 @roster_bp.route("/manager/roster/add", methods=["POST"])
 @login_required(role="manager")
 def add_employee():
@@ -39,6 +44,7 @@ def add_employee():
     name = request.form.get("name", "").strip()
     password = request.form.get("password", "")
     employment_type = request.form.get("employment_type", "")
+    station = request.form.get("station", "front")
     hired = request.form.get("hired_on", "").strip()
     email = request.form.get("email", "").strip()
     phone = request.form.get("phone", "").strip()
@@ -51,6 +57,7 @@ def add_employee():
         or not name
         or len(password) < 12
         or employment_type not in ("full_time", "part_time")
+        or station not in ("front", "back", "both")
         or not 1 <= weekly_hours <= 168
         or not valid_email(email)
         or not valid_phone(phone)
@@ -70,7 +77,7 @@ def add_employee():
     try:
         conn.execute(
             "INSERT INTO users (username, password, name, role, weekly_hours, "
-            "employment_type, hired_on, email, phone) VALUES (?,?,?,?,?,?,?,?,?)",
+            "employment_type, hired_on, email, phone, station) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 username,
                 generate_password_hash(password),
@@ -81,6 +88,7 @@ def add_employee():
                 hired or None,
                 email or None,
                 phone or None,
+                station,
             ),
         )
         conn.commit()
@@ -202,8 +210,9 @@ def delete_employee(user_id):
     reconcile_swap_invites(conn, shift_ids)
     conn.commit()
     conn.close()
-    run_scheduler(monday_of(date.today()).isoformat())
-    flash("Employee deleted; the current week's schedule was rebuilt.")
+    for week in _schedule_horizon():
+        run_scheduler(week)
+    flash("Employee deleted; the current and next week's schedules were queued for rebuild.")
     return redirect(url_for("roster.roster"))
 
 
@@ -238,9 +247,9 @@ def roster():
                 conn.close()
                 flash("Choose an employment type and a cap from 1 to 168 hours.")
                 return redirect(url_for("roster.roster"))
-            if station not in ("front", "back"):
+            if station not in ("front", "back", "both"):
                 conn.close()
-                flash("Choose a valid station (front/back).")
+                flash("Choose a valid station (front/back/both).")
                 return redirect(url_for("roster.roster"))
             if not valid_email(email) or not valid_phone(phone):
                 conn.close()
@@ -260,7 +269,8 @@ def roster():
         flash("Roster updated.")
         conn.close()
         # auto-rebuild: priority lineup may have changed -> re-run
-        run_scheduler(monday_of(date.today()).isoformat())
+        for week in _schedule_horizon():
+            run_scheduler(week)
         return redirect(url_for("roster.roster"))
     employees = conn.execute(
         "SELECT * FROM users WHERE role='employee' "

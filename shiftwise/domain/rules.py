@@ -74,7 +74,7 @@ def _assignment_limit_reason(rows, weekly_hours, shift):
     return None
 
 
-def priority_key(user_row):
+def priority_key(user_row, area=None):
     """Sort key for the priority lineup: front-of-house before back-of-house,
     then full-time before part-time, then earliest hire date first. Shared by
     the auto-scheduler and the conflict-resolution page so both sort
@@ -84,8 +84,9 @@ def priority_key(user_row):
         if not user_row["hired_on"]
         else (datetime.now() - datetime.fromisoformat(user_row["hired_on"])).days
     )
+    station_rank = 0 if user_row["station"] in ("front", "both") and area != "back" else 1
     return (
-        0 if user_row["station"] == "front" else 1,
+        station_rank,
         0 if user_row["employment_type"] == "full_time" else 1,
         -seniority,
     )

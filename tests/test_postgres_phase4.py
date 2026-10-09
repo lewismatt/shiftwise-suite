@@ -225,7 +225,15 @@ def test_twenty_pick_posts_coalesce_across_workers(pg, monkeypatch):
     assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == 0
     conn.close()
     assert pending()[0] == 20
-    assert appmod.process_rebuilds() == 0  # trailing deadline has not settled
+    conn = appmod.db()
+    conn.execute(
+        "UPDATE scheduler_rebuilds SET due_at=clock_timestamp() + interval '5 seconds' "
+        "WHERE week_start=?",
+        (week,),
+    )
+    conn.commit()
+    conn.close()
+    assert appmod.process_rebuilds() == 0  # explicitly hold the trailing deadline in the future
     calls = []
     original = debounce._schedule_week
 
@@ -234,7 +242,13 @@ def test_twenty_pick_posts_coalesce_across_workers(pg, monkeypatch):
         return original(conn, week)
 
     monkeypatch.setattr(debounce, "_schedule_week", counted)
-    time.sleep(0.55)
+    conn = appmod.db()
+    conn.execute(
+        "UPDATE scheduler_rebuilds SET due_at=clock_timestamp() WHERE week_start=?",
+        (week,),
+    )
+    conn.commit()
+    conn.close()
     with ThreadPoolExecutor(max_workers=4) as executor:
         assert sum(executor.map(lambda _: appmod.process_rebuilds(), range(4))) == 1
     assert calls == [week]
