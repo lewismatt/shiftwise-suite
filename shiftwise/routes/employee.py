@@ -300,7 +300,7 @@ def delete_all_notifications():
 def pick():
     if session["role"] != "employee":
         flash("Picks are for employees — managers don't schedule themselves.")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("calendar_view"))
     conn = db()
     try:
         uid = session["uid"]
@@ -319,7 +319,7 @@ def pick():
         ).fetchall()
         if not week_rows:
             flash("No shifts are posted for the next two weeks yet.")
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("calendar_view"))
 
         # Serialize repeated submissions by this employee after locking shifts.
         conn.execute("SELECT id FROM users WHERE id=? FOR NO KEY UPDATE", (uid,)).fetchone()
@@ -335,11 +335,11 @@ def pick():
                 value = request.form.get(f"rank_day_{day}")
                 if not value or not value.isdigit() or not 1 <= int(value) <= 7:
                     flash("Rank all seven days, from 1 (top choice) to 7.")
-                    return redirect(url_for("dashboard"))
+                    return redirect(url_for("calendar_view"))
                 day_ranked.append((int(value), day))
             if sorted(rank for rank, _ in day_ranked) != list(range(1, 8)):
                 flash("Use each day rank 1–7 exactly once.")
-                return redirect(url_for("dashboard"))
+                return redirect(url_for("calendar_view"))
             day_order = [day for _, day in sorted(day_ranked)]
             for week, rows in shifts_by_week.items():
                 ids_by_day = defaultdict(list)
@@ -354,11 +354,11 @@ def pick():
                     value = request.form.get(f"rank_{shift['id']}")
                     if not value or not value.isdigit():
                         flash("Rank every shift in each scheduled week.")
-                        return redirect(url_for("dashboard"))
+                        return redirect(url_for("calendar_view"))
                     ranked.append((int(value), shift["id"]))
                 if sorted(rank for rank, _ in ranked) != list(range(1, len(rows) + 1)):
                     flash("Use each shift rank exactly once in each week.")
-                    return redirect(url_for("dashboard"))
+                    return redirect(url_for("calendar_view"))
                 ranked_by_week[week] = ranked
 
         shift_ids = [shift["id"] for shift in week_rows]
@@ -393,8 +393,10 @@ def pick():
         conn.commit()
     finally:
         conn.close()
+    saved_weeks = len(ranked_by_week)
+    span = "both weeks" if saved_weeks == 2 else "the posted week"
     flash(
-        "Preferences saved for both weeks. Shifts are assigned automatically by seniority "
+        f"Preferences saved for {span}. Shifts are assigned automatically by seniority "
         "and full-time priority."
     )
     return redirect(url_for("calendar_view"))
@@ -600,6 +602,13 @@ def request_sick(shift_id):
 @employee_bp.route("/request/switch/<int:shift_id>", methods=["POST"])
 @login_required()
 def request_switch(shift_id):
+    """Ask a manager to move the employee onto another same-week shift.
+
+    Still supported, including a move onto an open slot. The dashboard no
+    longer posts here — peer swaps are that form — but the requests queue
+    still approves these, and the simulation harness still submits them.
+    This is not a deprecated alias of `/request/swap`.
+    """
     if session["role"] != "employee":
         abort(403)
     target = request.form.get("target_shift")

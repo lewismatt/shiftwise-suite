@@ -102,8 +102,11 @@
 </table>
 </div>
 
-<h2>Employees with no assignment this week</h2>
-<div class="card">
-  <p style="margin:0">{% for u in unassigned %}{{ u }}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">none — everyone's assigned</span>{% endfor %}</p>
-</div>
+<h2>Employees with no assignment</h2>
+{% for week in unassigned_by_week %}
+<section class="card" style="margin-bottom:12px" aria-label="Unassigned week of {{ week.week }}">
+  <p class="muted" style="margin:0 0 6px">Week of {{ week.week }}</p>
+  <p style="margin:0">{% for u in week.names %}{{ u }}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">none — everyone's assigned</span>{% endfor %}</p>
+</section>
+{% endfor %}
 {% endblock %}

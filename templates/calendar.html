@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">{{ 'Front of house' if area == 'front' else 'Back of house' }} schedule — {{ view_name }}</h1>
+{% set area_label = {'front': 'Front of house', 'back': 'Back of house', 'all': 'Both houses'}[area] %}
+<h1 class="page-title">{{ area_label }} schedule — {{ view_name }}</h1>
 
 <div class="card cal-controls">
   <div class="cal-nav-group">
@@ -14,6 +15,7 @@
   <form method="get" action="{{ url_for('calendar_view') }}" class="cal-filter-group">
     <input type="hidden" name="week" value="{{ week }}">
     <select name="area" aria-label="Choose schedule" onchange="this.form.submit()">
+      <option value="all" {% if area == 'all' %}selected{% endif %}>Both houses</option>
       <option value="front" {% if area == 'front' %}selected{% endif %}>Front of house</option>
       <option value="back" {% if area == 'back' %}selected{% endif %}>Back of house</option>
     </select>
@@ -38,6 +40,7 @@
     {% for s in d.shifts %}
     <div class="cal-shift {{ 'cal-mine' if s.mine }}">
       <div class="cal-time">{{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</div>
+      {% if area == 'all' %}<div class="muted">{{ 'Front of house' if s.area == 'front' else 'Back of house' }}</div>{% endif %}
       {% if s.note %}<div class="muted">{{ s.note }}</div>{% endif %}
       {% if s.mine %}
         <span class="tag {{ 'warn' if s.status in ('swap_requested', 'sick', 'swap_invited') else 'ok' }}">

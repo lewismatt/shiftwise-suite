@@ -28,7 +28,7 @@ def test_employee_coverage_willingness_is_saved_and_honored():
         form[f"rank_{shift_id}"] = str(rank)
         form[f"cover_{shift_id}"] = "yes" if rank == 1 else "no"
     response = client.post("/pick", data=form, follow_redirects=True)
-    assert b"Preferences saved" in response.data
+    assert b"Preferences saved for the posted week." in response.data
 
     conn = appmod.db()
     saved = conn.execute(

@@ -26,7 +26,8 @@ conflicts_bp = Blueprint("conflicts", __name__)
 @login_required(role="manager")
 def conflicts():
     """Shifts where picks (at the same rank) exceed open slots, with
-    claimants sorted by the priority lineup (FT first, then seniority)."""
+    claimants sorted by the priority lineup (dedicated house, then
+    full-time, then seniority)."""
     week = request.args.get("week", "") or monday_of(date.today()).isoformat()
     try:
         week = monday_of(date.fromisoformat(week)).isoformat()

@@ -226,13 +226,11 @@ def _run_assignment_rounds(state):
     capacity = state.capacity
     shift_hours_map = state.shift_hours_map
 
-    # Priority lineup: front-of-house before back-of-house, then
-    # full-time before part-time, then earliest hire date first.
-    # Employees missing a hire date rank last within their group
-    # (treated as newest). Each employee is only scheduled into
-    # shifts of their own area: a FOH employee's picks on BOH
-    # shifts (and vice versa) are ignored — the two houses run as
-    # two separate schedules.
+    # Priority lineup for this shift: dedicated house staff before
+    # dual-house floaters, then full-time before part-time, then
+    # earliest hire date first. Employees missing a hire date rank
+    # last within their group (treated as newest). A pick is eligible
+    # when the employee's station is the shift's house or both.
     def priority(uid, sid):
         return priority_key(users[uid], area_of[sid])
 
@@ -525,9 +523,9 @@ def _schedule_week(conn, week_start, actor="system"):
 def run_scheduler(week_start, actor="system"):
     """Assign picks to shifts across the week.
 
-    Round-based, with a priority lineup: employees are ordered by
-    employment type (full-time before part-time), then by seniority
-    (earliest hire date first). In round N every employee claims their
+    Round-based, with a priority lineup: dedicated house staff outrank
+    dual-house floaters for that shift, then full-time before part-time,
+    then earliest hire date. In round N every employee claims their
     rank-N pick; contested slots go to the highest-priority employee in
     line. Employees are never scheduled past their weekly hours cap
     (full-time default 40h, part-time as set on the roster), including

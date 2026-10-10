@@ -75,16 +75,30 @@ def _assignment_limit_reason(rows, weekly_hours, shift):
 
 
 def priority_key(user_row, area=None):
-    """Sort key for the priority lineup: front-of-house before back-of-house,
-    then full-time before part-time, then earliest hire date first. Shared by
-    the auto-scheduler and the conflict-resolution page so both sort
-    identically."""
+    """Sort key for a shift's priority lineup.
+
+    Dedicated house staff outrank dual-house floaters for that house, so
+    floaters stay available for the other house. Ineligible stations sort
+    last. A lineup with no area does not rank by house — houses are peers
+    once shifts are partitioned. Then full-time before part-time, then
+    earliest hire date first. Shared by the auto-scheduler, coverage, and
+    conflict resolution so they sort identically.
+    """
     seniority = (
         0
         if not user_row["hired_on"]
         else (datetime.now() - datetime.fromisoformat(user_row["hired_on"])).days
     )
-    station_rank = 0 if user_row["station"] in ("front", "both") and area != "back" else 1
+    station = user_row["station"]
+    if area in ("front", "back"):
+        if station == area:
+            station_rank = 0
+        elif station == "both":
+            station_rank = 1
+        else:
+            station_rank = 2
+    else:
+        station_rank = 0
     return (
         station_rank,
         0 if user_row["employment_type"] == "full_time" else 1,

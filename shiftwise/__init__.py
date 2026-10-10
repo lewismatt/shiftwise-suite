@@ -65,27 +65,24 @@ def create_app(config_class=Config):
     @flask_app.context_processor
     def inject_time_format():
         time_format = "24h"
-        user = getattr(g, "current_user", None)
-        if user is None and session.get("uid"):
-            conn = db()
-            try:
-                user = conn.execute(
-                    "SELECT time_format FROM users WHERE id=?", (session["uid"],)
-                ).fetchone()
-            finally:
-                conn.close()
-        if user and user["time_format"] in ("12h", "24h"):
-            time_format = user["time_format"]
         unread_notifications = 0
-        if session.get("uid"):
+        uid = session.get("uid")
+        if uid:
+            user = getattr(g, "current_user", None)
             conn = db()
             try:
+                if user is None:
+                    user = conn.execute(
+                        "SELECT time_format FROM users WHERE id=?", (uid,)
+                    ).fetchone()
                 unread_notifications = conn.execute(
                     "SELECT COUNT(*) FROM notifications WHERE user_id=? AND read=FALSE",
-                    (session["uid"],),
+                    (uid,),
                 ).fetchone()[0]
             finally:
                 conn.close()
+            if user and user["time_format"] in ("12h", "24h"):
+                time_format = user["time_format"]
         return {
             "time_format": time_format,
             "unread_notifications": unread_notifications,

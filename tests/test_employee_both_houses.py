@@ -59,7 +59,7 @@ def test_employee_can_rank_and_work_both_houses():
     assert "Request an employee swap" in dashboard_html
     form = {f"rank_{sid}": str((i % 2) + 1) for i, sid in enumerate(shift_ids)}
     response = client.post("/pick", data=form, follow_redirects=True)
-    assert response.status_code == 200 and b"Preferences saved" in response.data
+    assert response.status_code == 200 and b"Preferences saved for both weeks." in response.data
 
     for week in weeks:
         appmod.run_scheduler(week)
@@ -86,3 +86,42 @@ def test_employee_can_rank_and_work_both_houses():
     client.post("/login", data={"username": "manager", "password": "manager"})
     roster = client.get("/manager/roster")
     assert roster.status_code == 200 and b"Both FOH and BOH" in roster.data
+
+
+def test_dual_house_calendar_defaults_to_the_combined_schedule():
+    appmod.init_db(seed_demo=True)
+    client = appmod.app.test_client()
+    client.post("/login", data={"username": "manager", "password": "manager"})
+    conn = appmod.db()
+    alex_id = conn.execute("SELECT id FROM users WHERE username='alex'").fetchone()["id"]
+    conn.close()
+    assert client.post("/manager/roster", data={f"station_{alex_id}": "both"}).status_code == 302
+    client.post("/logout")
+    client.post("/login", data={"username": "alex", "password": "alex"})
+
+    combined = client.get("/calendar")
+    html = combined.data.decode()
+    assert combined.status_code == 200
+    assert "Both houses schedule — Alex Rivera" in html
+    assert html.count('class="cal-shift') == 14
+    front = client.get("/calendar?area=front")
+    front_html = front.data.decode()
+    assert "Front of house schedule" in front_html
+    assert front_html.count('class="cal-shift') == 7
+
+    client.post("/logout")
+    client.post("/login", data={"username": "manager", "password": "manager"})
+    manager_all = client.get("/calendar?area=all").data.decode()
+    assert "Alex Rivera" in manager_all and "Jordan Diaz" in manager_all
+
+
+def test_invalid_preference_submit_returns_to_the_calendar():
+    appmod.init_db(seed_demo=True)
+    client = appmod.app.test_client()
+    client.post("/login", data={"username": "alex", "password": "alex"})
+    response = client.post("/pick", data={"rank_1": "1"})
+    assert response.status_code == 302
+    assert response.location.endswith("/calendar")
+    followed = client.post("/pick", data={"rank_1": "1"}, follow_redirects=True)
+    assert b"Rank every shift in each scheduled week." in followed.data
+    assert b'id="preference-form"' in followed.data

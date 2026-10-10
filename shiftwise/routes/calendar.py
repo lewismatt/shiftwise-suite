@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 from flask import (
     Blueprint,
+    g,
     render_template,
     request,
     session,
@@ -38,7 +39,7 @@ def calendar_days(conn, week, user_id, area=None):
         ).fetchall()
     else:
         shifts = conn.execute(
-            "SELECT * FROM shifts WHERE week_start=? ORDER BY id", (week,)
+            "SELECT * FROM shifts WHERE week_start=? ORDER BY area, id", (week,)
         ).fetchall()
     staff = defaultdict(list)
     for row in conn.execute(
@@ -59,6 +60,7 @@ def calendar_days(conn, week, user_id, area=None):
                 "start_time": s["start_time"],
                 "end_time": s["end_time"],
                 "note": s["note"],
+                "area": s["area"],
                 "status": status,
                 "mine": status is not None,
                 "who": ", ".join(r["name"] for r in rows) or None,
@@ -86,31 +88,32 @@ def calendar_view():
         week = monday_of(date.fromisoformat(raw)).isoformat()
     except ValueError:
         week = monday_of(date.today()).isoformat()
-    conn = db()
-    uid = session["uid"]
-    current_user = conn.execute("SELECT station FROM users WHERE id=?", (uid,)).fetchone()
+    viewer = g.current_user
+    uid = viewer["id"]
     area = request.args.get("area")
-    if area not in ("front", "back"):
-        area = (
-            current_user["station"]
-            if current_user and current_user["station"] in ("front", "back")
-            else "front"
-        )
+    if area not in ("front", "back", "all"):
+        station = viewer["station"]
+        area = station if station in ("front", "back") else "all" if station == "both" else "front"
+    conn = db()
     employees = []
+    view_user = viewer
     if session["role"] == "manager":
-        employees = conn.execute(
-            "SELECT id, name FROM users WHERE role='employee' AND station IN (?, 'both') ORDER BY name",
-            (area,),
-        ).fetchall()
+        if area == "all":
+            employees = conn.execute(
+                "SELECT id, name FROM users WHERE role='employee' ORDER BY name"
+            ).fetchall()
+        else:
+            employees = conn.execute(
+                "SELECT id, name FROM users WHERE role='employee' "
+                "AND station IN (?, 'both') ORDER BY name",
+                (area,),
+            ).fetchall()
         req = request.args.get("user_id", "")
         if req.isdigit():
-            row = conn.execute(
-                "SELECT id FROM users WHERE id=? AND role='employee' AND station IN (?, 'both')",
-                (int(req), area),
-            ).fetchone()
-            if row:
-                uid = row["id"]
-    view_user = conn.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
+            selected = next((row for row in employees if row["id"] == int(req)), None)
+            if selected:
+                uid = selected["id"]
+                view_user = selected
     days = calendar_days(conn, week, uid, area)
     preference_weeks = [monday_of(date.today()).isoformat()]
     preference_weeks.append(
@@ -120,7 +123,7 @@ def calendar_view():
     preference_picks = {}
     cover_prefs = {}
     if session["role"] == "employee":
-        station = current_user["station"] if current_user else "front"
+        station = viewer["station"]
         areas = ("front", "back") if station == "both" else (station,)
         placeholders = ",".join("?" for _ in areas)
         week_placeholders = ",".join("?" for _ in preference_weeks)
