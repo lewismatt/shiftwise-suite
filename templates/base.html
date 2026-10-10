@@ -25,6 +25,8 @@
     --danger-soft: #3a1b25;
     --navy: #081020;
     --teal: #35d4c0;
+    --accent-contrast: #081020;
+    --warn-contrast: #081020;
     --shadow: 0 1px 3px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.3);
     --shadow-lg: 0 8px 30px rgba(0,0,0,.55);
   }
@@ -62,7 +64,7 @@
     align-items: center;
     padding: 0 28px;
     height: 60px;
-    background: rgba(8, 16, 32, 0.94);
+    background: color-mix(in srgb, var(--navy) 94%, transparent);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-bottom: 1px solid var(--line);
@@ -76,7 +78,7 @@
   .brand .name span { color: var(--teal); font-weight: 400; }
   nav .links { display: flex; align-items: center; gap: 4px; margin-left: 36px; }
   nav a {
-    color: #9fb4cc;
+    color: var(--dim);
     text-decoration: none;
     padding: 7px 13px;
     border-radius: 7px;
@@ -84,16 +86,16 @@
     font-weight: 500;
     transition: background .15s, color .15s;
   }
-  nav a:hover { background: rgba(46,124,246,.15); color: #fff; }
-  nav a.active { background: var(--accent); color: #081020; font-weight: 600; }
+  nav a:hover { background: var(--accent-soft); color: var(--text); }
+  nav a.active { background: var(--accent); color: var(--accent-contrast); font-weight: 600; }
   .nav-right { display: flex; align-items: center; gap: 14px; }
-  .nav-user { display: flex; align-items: center; gap: 9px; color: #f2e6d8; font-size: 14px; }
+  .nav-user { display: flex; align-items: center; gap: 9px; color: var(--text); font-size: 14px; }
   .nav-user a { color: var(--dim); font-size: 13px; padding: 4px 8px; text-decoration: none; border-radius: 6px; }
-  .nav-user a:hover { color: #fff; background: rgba(255,255,255,0.06); }
+  .nav-user a:hover { color: var(--text); background: var(--accent-soft); }
   .avatar {
     width: 32px; height: 32px; border-radius: 50%;
     background: var(--accent);
-    color: #081020;
+    color: var(--accent-contrast);
     display: inline-flex; align-items: center; justify-content: center;
     font-size: 13px; font-weight: 700;
     flex-shrink: 0;
@@ -186,7 +188,7 @@
     white-space: nowrap;
   }
   tr:last-child td { border-bottom: none; }
-  tbody tr:hover { background: #16243a; }
+  tbody tr:hover { background: var(--card-hover); }
 
   /* ---------- tags ---------- */
   .tag {
@@ -199,14 +201,14 @@
     line-height: 1.3;
     white-space: nowrap;
   }
-  .tag.ok { background: #123826; color: var(--ok); }
-  .tag.warn { background: #3d3312; color: var(--warn); }
-  .tag.dim { background: #1a2436; color: var(--dim); }
+  .tag.ok { background: var(--bg-soft); color: var(--ok); }
+  .tag.warn { background: var(--bg-soft); color: var(--warn); }
+  .tag.dim { background: var(--bg-soft); color: var(--dim); }
 
   /* ---------- buttons & inputs ---------- */
   .btn {
     background: var(--accent);
-    color: #081020;
+    color: var(--accent-contrast);
     border: none;
     padding: 9px 16px;
     border-radius: 8px;
@@ -222,7 +224,7 @@
     gap: 6px;
     white-space: nowrap;
   }
-  .btn:hover { background: #4f94ff; box-shadow: 0 2px 8px rgba(46,124,246,.35); }
+  .btn:hover { background: var(--accent-dark); box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent); }
   .btn:active { transform: scale(0.98); }
   .btn.sm { padding: 6px 12px; font-size: 12.5px; border-radius: 7px; }
   .btn.ghost {
@@ -230,7 +232,7 @@
     border: 1px solid var(--line);
     color: var(--text);
   }
-  .btn.ghost:hover { background: #16243a; box-shadow: none; }
+  .btn.ghost:hover { background: var(--card-hover); box-shadow: none; }
   .btn.danger { background: transparent; border: 1px solid var(--danger-line); color: var(--danger); }
   .btn.danger:hover { background: var(--danger-soft); box-shadow: none; }
 
@@ -288,7 +290,7 @@
     border-bottom: 1px solid var(--line);
     box-shadow: var(--shadow);
   }
-  .notif.unread { border-left-color: var(--warn); background: #142038; }
+  .notif.unread { border-left-color: var(--warn); background: var(--accent-soft); }
   .notif.conflict { border-left-color: var(--warn); }
   .notif.assignment { border-left-color: var(--ok); }
   .notif.swap_request { border-left-color: var(--teal); }
@@ -304,7 +306,7 @@
     justify-content: center;
     border-radius: 999px;
     background: var(--warn);
-    color: #081020;
+    color: var(--warn-contrast);
     font-size: 11px;
     font-weight: 800;
     line-height: 1;
@@ -360,8 +362,8 @@
     border-color: var(--accent);
     border-width: 2px;
     padding: 9px;
-    background: #11223d;
-    box-shadow: 0 0 14px rgba(46, 124, 246, 0.25);
+    background: var(--accent-soft);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 25%, transparent);
   }
   .cal-head {
     font-weight: 700;
@@ -374,7 +376,7 @@
   }
   .cal-today-badge {
     background: var(--accent);
-    color: #081020;
+    color: var(--accent-contrast);
     font-size: 10px;
     font-weight: 800;
     padding: 2px 6px;
@@ -439,6 +441,24 @@
     line-height: 1.3;
     margin-top: 3px;
   }
+  .dashboard-house-select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    margin-top: 3px;
+    padding: 0 22px 0 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.3;
+    cursor: pointer;
+  }
+  .dashboard-house-select:focus { outline-offset: 2px; }
+  .dashboard-house-select option { background: var(--card); color: var(--text); }
   .dashboard-note {
     border-left: 3px solid var(--accent);
     background: var(--bg-soft);
@@ -617,7 +637,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(8, 16, 32, 0.96);
+      background: color-mix(in srgb, var(--navy) 96%, transparent);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
       border-bottom: 1px solid var(--line);
@@ -646,7 +666,7 @@
       color: var(--text);
     }
     .mobile-menu a {
-      color: #9fb4cc;
+      color: var(--dim);
       text-decoration: none;
       padding: 12px 14px;
       border-radius: 8px;
@@ -656,8 +676,8 @@
       display: flex;
       align-items: center;
     }
-    .mobile-menu a:hover, .mobile-menu a:active { background: rgba(46,124,246,.15); color: #fff; }
-    .mobile-menu a.active { background: var(--accent); color: #081020; font-weight: 700; }
+    .mobile-menu a:hover, .mobile-menu a:active { background: var(--accent-soft); color: var(--text); }
+    .mobile-menu a.active { background: var(--accent); color: var(--accent-contrast); font-weight: 700; }
     .mobile-menu hr {
       border: 0;
       border-top: 1px solid var(--line);
@@ -689,6 +709,7 @@
     .dashboard-stat { padding: 11px 10px; }
     .dashboard-stat strong { font-size: 18px; }
     .dashboard-stat-label { font-size: 9px; }
+    .dashboard-house-select { font-size: 18px !important; }
     .dashboard-heading { align-items: flex-start; }
     .dashboard-heading > .btn { flex: 0 0 auto; }
     .action-card .field-row {
@@ -975,6 +996,7 @@
     .requests-table td:last-child form { margin-right: 4px; }
   }
 </style>
+{% if session.role == 'employee' %}<style>:root { {{ background_palette_css|safe }}; }</style>{% endif %}
 </head>
 <body>
 <nav>
@@ -992,11 +1014,11 @@
     </button>
     <a href="{{ url_for('dashboard') }}" class="brand">
       <svg width="34" height="34" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="ShiftWise logo">
-        <rect x="2" y="2" width="44" height="44" rx="11" fill="#2e7cf6"/>
-        <path d="M14 30 L21 20 L27 26 L34 15" stroke="#081020" stroke-width="4"
+        <rect x="2" y="2" width="44" height="44" rx="11" fill="var(--accent)"/>
+        <path d="M14 30 L21 20 L27 26 L34 15" stroke="var(--accent-contrast)" stroke-width="4"
               stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-        <circle cx="34" cy="15" r="3.2" fill="#5fd7c9"/>
-        <rect x="12" y="35" width="24" height="3.4" rx="1.7" fill="#ffb347"/>
+        <circle cx="34" cy="15" r="3.2" fill="var(--teal)"/>
+        <rect x="12" y="35" width="24" height="3.4" rx="1.7" fill="var(--warn)"/>
       </svg>
       <span class="name">ShiftWise</span>
     </a>

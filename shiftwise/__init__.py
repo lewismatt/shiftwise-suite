@@ -21,6 +21,7 @@ from shiftwise.scheduler.coverage import apply_sick, coverage_plan
 from shiftwise.scheduler.debounce import init_app as init_scheduler
 from shiftwise.scheduler.engine import run_scheduler
 from shiftwise.security import init_app as init_csrf
+from shiftwise.themes import PALETTES_BY_ID, css_variables
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
@@ -65,6 +66,7 @@ def create_app(config_class=Config):
     @flask_app.context_processor
     def inject_time_format():
         time_format = "24h"
+        background_palette = "shiftwise"
         unread_notifications = 0
         uid = session.get("uid")
         if uid:
@@ -73,7 +75,8 @@ def create_app(config_class=Config):
             try:
                 if user is None:
                     user = conn.execute(
-                        "SELECT time_format FROM users WHERE id=?", (uid,)
+                        "SELECT time_format, background_palette, role FROM users WHERE id=?",
+                        (uid,),
                     ).fetchone()
                 unread_notifications = conn.execute(
                     "SELECT COUNT(*) FROM notifications WHERE user_id=? AND read=FALSE",
@@ -83,8 +86,12 @@ def create_app(config_class=Config):
                 conn.close()
             if user and user["time_format"] in ("12h", "24h"):
                 time_format = user["time_format"]
+            if user and user["role"] == "employee" and user["background_palette"] in PALETTES_BY_ID:
+                background_palette = user["background_palette"]
         return {
             "time_format": time_format,
+            "background_palette": background_palette,
+            "background_palette_css": css_variables(background_palette),
             "unread_notifications": unread_notifications,
         }
 

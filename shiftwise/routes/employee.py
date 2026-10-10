@@ -33,6 +33,7 @@ from shiftwise.notify import notify
 from shiftwise.scheduler.coverage import apply_sick, coverage_plan
 from shiftwise.scheduler.debounce import enqueue_rebuild
 from shiftwise.scheduler.debounce import request_rebuild as run_scheduler
+from shiftwise.themes import PALETTES_BY_ID
 
 employee_bp = Blueprint("employee", __name__)
 
@@ -91,6 +92,20 @@ def settings():
             session.clear()
             flash("Password changed. Sign in again.")
             return redirect(url_for("login"))
+        if action == "background_palette":
+            palette_id = request.form.get("background_palette", "")
+            if session["role"] != "employee":
+                conn.close()
+                abort(403)
+            if palette_id not in PALETTES_BY_ID:
+                conn.close()
+                flash("Choose one of the available background themes.")
+                return redirect(url_for("settings"))
+            conn.execute("UPDATE users SET background_palette=? WHERE id=?", (palette_id, uid))
+            conn.commit()
+            conn.close()
+            flash("Background theme saved.")
+            return redirect(url_for("settings"))
         time_format = request.form.get("time_format", "")
         if time_format not in ("12h", "24h"):
             conn.close()
@@ -102,10 +117,16 @@ def settings():
         flash("Clock format saved.")
         return redirect(url_for("settings"))
     user = conn.execute(
-        "SELECT name, username, email, time_format FROM users WHERE id=?", (uid,)
+        "SELECT name, username, email, time_format, background_palette, role FROM users WHERE id=?",
+        (uid,),
     ).fetchone()
     conn.close()
-    return render_template("settings.html", user=user, time_format=user["time_format"])
+    return render_template(
+        "settings.html",
+        user=user,
+        time_format=user["time_format"],
+        palettes=PALETTES_BY_ID.values(),
+    )
 
 
 @employee_bp.route("/")
@@ -118,6 +139,9 @@ def dashboard():
     display_weeks = [week] if session["role"] == "manager" else [week, next_week]
     week_placeholders = ",".join("?" for _ in display_weeks)
     my = g.current_user
+    display_area = request.args.get("house", "both") if my["station"] == "both" else my["station"]
+    if display_area not in ("front", "back", "both"):
+        display_area = "both" if my["station"] == "both" else my["station"]
     shift_query = f"SELECT * FROM shifts WHERE week_start IN ({week_placeholders})"
     shift_params = tuple(display_weeks)
     if session["role"] != "manager":
@@ -227,6 +251,7 @@ def dashboard():
         my_assignments=my_assignments,
         my_picks=my_picks,
         my_station=my["station"],
+        display_area=display_area,
         assigned_this_week=len(this_week_shifts),
         hours_this_week=hours_this_week,
         roster=roster,

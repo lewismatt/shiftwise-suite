@@ -11,14 +11,14 @@
 <div class="dashboard-stats" aria-label="Schedule summary">
   <div class="dashboard-stat" data-metric="assigned-shifts"><span class="dashboard-stat-label">Assigned shifts</span><strong>{{ assigned_this_week }}</strong></div>
   <div class="dashboard-stat" data-metric="hours-this-week"><span class="dashboard-stat-label">Hours this week</span><strong>{{ hours_this_week|round(1) }}</strong></div>
-  <div class="dashboard-stat" data-metric="house"><span class="dashboard-stat-label">House</span><strong>{{ 'Both' if my_station == 'both' else ('Front' if my_station == 'front' else 'Back') }}</strong></div>
+  <div class="dashboard-stat" data-metric="house"><span class="dashboard-stat-label">House</span>{% if my_station == 'both' %}<form method="get" aria-label="Choose schedule house"><select class="dashboard-house-select" name="house" aria-label="House" onchange="this.form.submit()"><option value="both" {% if display_area == 'both' %}selected{% endif %}>Both</option><option value="front" {% if display_area == 'front' %}selected{% endif %}>FOH</option><option value="back" {% if display_area == 'back' %}selected{% endif %}>BOH</option></select></form>{% else %}<strong>{{ 'Front' if my_station == 'front' else 'Back' }}</strong>{% endif %}</div>
 </div>
 <h2>Your upcoming shifts</h2>
-<p class="muted" style="margin-bottom:14px">{% if my_station == 'both' %}You're scheduled for both <strong>front of house (FOH)</strong> and <strong>back of house (BOH)</strong> shifts.{% else %}You're on the <strong>{{ 'front of house (FOH)' if my_station == 'front' else 'back of house (BOH)' }}</strong> schedule.{% endif %}</p>
+<p class="muted" style="margin-bottom:14px">{% if my_station == 'both' %}Showing your <strong>{{ 'front of house (FOH)' if display_area == 'front' else ('back of house (BOH)' if display_area == 'back' else 'front and back of house') }}</strong> shifts.{% else %}You're on the <strong>{{ 'front of house (FOH)' if my_station == 'front' else 'back of house (BOH)' }}</strong> schedule.{% endif %}</p>
 <div class="table-wrap">
 <table class="shifts-table">
   <tr><th>Week of</th><th>Day</th><th>Time</th><th>Staffed</th><th>Status / your pick</th></tr>
-  {% for s in shifts if s.id in my_assignments %}
+  {% for s in shifts if (display_area == 'both' or s.area == display_area) and s.id in my_assignments %}
   <tr data-schedule-shift="{{ s.id }}">
     <td data-label="Week">{{ s.week_start }}</td>
     <td data-label="Day"><strong>{{ {'Mon':'Monday','Tue':'Tuesday','Wed':'Wednesday','Thu':'Thursday','Fri':'Friday','Sat':'Saturday','Sun':'Sunday'}[s.day] }}</strong>{% if s.note %} <span class="muted">· {{ s.note }}</span>{% endif %}</td>
