@@ -1,81 +1,139 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="page-title">Roster</h1>
-<p class="muted" style="margin-bottom:18px">Assign employees to FOH, BOH, or both houses. Employees set to both can rank and be scheduled for shifts in either area. The scheduler never schedules anyone past their cap.</p>
-<p class="muted">Add employee contact details, save the roster, then use Send link. Text numbers must use international format, such as +15551234567. Delivery requires the app's public HTTPS URL and configured SMTP and/or Twilio settings.</p>
+<div class="roster-page">
+  <header class="roster-heading">
+    <div>
+      <h1 class="page-title">Roster</h1>
+      <p class="muted">Keep employee details, scheduling limits, and account access in one place.</p>
+    </div>
+    <div class="roster-stats" aria-label="Roster summary">
+      <div class="roster-stat"><strong>{{ employees|length }}</strong><span>Employees</span></div>
+      <div class="roster-stat"><strong>{{ employees|selectattr('employment_type', 'equalto', 'full_time')|list|length }}</strong><span>Full-time</span></div>
+      <div class="roster-stat"><strong>{{ employees|selectattr('station', 'equalto', 'both')|list|length }}</strong><span>Both houses</span></div>
+    </div>
+  </header>
 
-<div class="card roster-add" style="margin-bottom:18px">
-  <h2 style="margin-top:0">Add employee</h2>
-  <form method="post" action="{{ url_for('add_employee') }}" class="form-grid-add">
-    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-    <input name="username" placeholder="Username" required>
-    <input name="name" placeholder="Name" required>
-    <input name="password" type="password" placeholder="Initial password (12+ characters)" minlength="12" required>
-    <input name="email" type="email" placeholder="Email (optional)">
-    <input name="phone" type="tel" placeholder="Phone +country code (optional)">
-    <select name="employment_type"><option value="full_time">Full-time</option><option value="part_time">Part-time</option></select>
-    <select name="station" aria-label="House"><option value="front">Front of house</option><option value="back">Back of house</option><option value="both">Both FOH and BOH</option></select>
-    <input name="hired_on" type="date" aria-label="Hire date">
-    <input name="weekly_hours" type="number" value="40" min="1" max="168" aria-label="Weekly hours cap" required>
-    <button class="btn">Add employee</button>
-  </form>
-</div>
+  <section class="card roster-add" aria-labelledby="add-employee-heading">
+    <div class="section-heading">
+      <div>
+        <h2 id="add-employee-heading">Add employee</h2>
+        <p class="muted">Create an account, set the scheduling defaults, and add contact details.</p>
+      </div>
+    </div>
+    <form method="post" action="{{ url_for('add_employee') }}" class="roster-add-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <div class="roster-form-grid">
+        <label><span>Full name</span><input name="name" placeholder="Alex Rivera" required></label>
+        <label><span>Username</span><input name="username" placeholder="alex.rivera" required></label>
+        <label><span>Initial password</span><input name="password" type="password" placeholder="12+ characters" minlength="12" required></label>
+        <label><span>Email <span class="field-optional">optional</span></span><input name="email" type="email" placeholder="alex@example.com"></label>
+        <label><span>Phone <span class="field-optional">optional</span></span><input name="phone" type="tel" placeholder="+15551234567"></label>
+        <label><span>Employment type</span><select name="employment_type"><option value="full_time">Full-time</option><option value="part_time">Part-time</option></select></label>
+        <label><span>House</span><select name="station"><option value="front">Front of house</option><option value="back">Back of house</option><option value="both">Both FOH and BOH</option></select></label>
+        <label><span>Hire date <span class="field-optional">optional</span></span><input name="hired_on" type="date"></label>
+        <label><span>Weekly hours cap</span><input name="weekly_hours" type="number" value="40" min="1" max="168" required></label>
+      </div>
+      <div class="roster-form-footer">
+        <p class="muted">Use an international phone number, such as +15551234567. Delivery also requires the app's public HTTPS URL and configured email or text settings.</p>
+        <button class="btn">Add employee</button>
+      </div>
+    </form>
+  </section>
 
-<form id="roster-save" method="post" action="{{ url_for('roster') }}"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"></form>
-<div class="table-wrap">
-<table class="roster-table">
-  <tr><th>Employee</th><th>Email</th><th>Phone</th><th>House</th><th>Employment type</th><th>Hire date</th><th>Weekly hours cap</th><th>Account / schedule link</th></tr>
-  {% for e in employees %}
-  <tr>
-    <td data-label="Employee"><strong>{{ e.name }}</strong> <span class="muted">@{{ e.username }}</span></td>
-    <td data-label="Email"><input form="roster-save" type="email" name="email_{{ e.id }}" value="{{ e.email or '' }}" placeholder="Email" aria-label="Email for {{ e.name }}"></td>
-    <td data-label="Phone"><input form="roster-save" type="tel" name="phone_{{ e.id }}" value="{{ e.phone or '' }}" placeholder="+15551234567" aria-label="Phone for {{ e.name }}"></td>
-    <td data-label="House">
-      <select form="roster-save" name="station_{{ e.id }}">
-        <option value="front" {% if e.station == 'front' %}selected{% endif %}>Front of house</option>
-        <option value="back" {% if e.station == 'back' %}selected{% endif %}>Back of house</option>
-        <option value="both" {% if e.station == 'both' %}selected{% endif %}>Both FOH and BOH</option>
-      </select>
-    </td>
-    <td data-label="Employment type">
-      <select form="roster-save" name="type_{{ e.id }}">
-        <option value="full_time" {% if e.employment_type == 'full_time' %}selected{% endif %}>Full-time</option>
-        <option value="part_time" {% if e.employment_type != 'full_time' %}selected{% endif %}>Part-time</option>
-      </select>
-    </td>
-    <td data-label="Hire date"><input form="roster-save" type="date" name="hired_{{ e.id }}" value="{{ e.hired_on or '' }}"></td>
-    <td data-label="Weekly hours cap"><input form="roster-save" type="number" name="cap_{{ e.id }}" value="{{ e.weekly_hours or 40 }}" min="1" max="168" class="cap-input"></td>
-    <td data-label="Account">
-      <form method="post" action="{{ url_for('send_employee_schedule_link', user_id=e.id) }}" style="display:flex; gap:6px; margin-bottom:6px">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <button class="btn sm" name="channel" value="email" {% if not e.email %}disabled title="Add an email address first"{% endif %}>Email link</button>
-        <button class="btn sm" name="channel" value="sms" {% if not e.phone %}disabled title="Add a phone number first"{% endif %}>Text link</button>
-      </form>
-      <button class="btn sm" type="button" onclick="document.getElementById('password-dialog-{{ e.id }}').showModal()">Reset password</button>
-      <dialog id="password-dialog-{{ e.id }}">
-        <form method="post" action="{{ url_for('reset_employee_password', user_id=e.id) }}">
-          <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-          <h2 style="margin-top:0">Reset password for {{ e.name }}</h2>
-          <p class="muted" style="margin-top:-6px; margin-bottom:14px">Set a temporary password (12+ characters) for this employee.</p>
-          <input name="password" type="password" minlength="12" autocomplete="new-password" placeholder="New password (12+ characters)" required aria-label="New password for {{ e.name }}" style="width:100%; margin-bottom:10px">
-          <input name="confirm_password" type="password" minlength="12" autocomplete="new-password" placeholder="Confirm new password" required aria-label="Confirm new password for {{ e.name }}" style="width:100%; margin-bottom:14px">
-          <div style="display:flex; gap:8px; justify-content:flex-end">
-            <button class="btn sm ghost" type="button" onclick="this.closest('dialog').close()">Cancel</button>
-            <button class="btn sm">Save password</button>
-          </div>
-        </form>
-      </dialog>
-      <form method="post" action="{{ url_for('delete_employee', user_id=e.id) }}" onsubmit="return confirm('Permanently delete {{ e.name }} and their schedule history?')">
-        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-        <input type="hidden" name="confirm" value="yes">
-        <button class="btn sm" style="background:#a33; color:#fff">Delete employee</button>
-      </form>
-    </td>
-  </tr>
-  {% endfor %}
-</table>
+  <section class="roster-section" aria-labelledby="current-roster-heading">
+    <div class="section-heading roster-section-heading">
+      <div>
+        <h2 id="current-roster-heading">Current roster</h2>
+        <p class="muted">Update contact details, placement, and weekly limits. Employees set to both houses can rank and be scheduled for shifts in either area. The scheduler never schedules anyone past their weekly cap. Saving re-runs the auto-assigner.</p>
+      </div>
+      <button class="btn" type="submit" form="roster-save">Save roster</button>
+    </div>
+
+    <form id="roster-save" method="post" action="{{ url_for('roster') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+    </form>
+    <div class="table-wrap">
+      <table class="roster-table">
+        <caption class="sr-only">Current employees and scheduling settings</caption>
+        <thead>
+          <tr><th>Employee</th><th>Contact</th><th>Placement</th><th>Scheduling limits</th><th>Account actions</th></tr>
+        </thead>
+        <tbody>
+        {% for e in employees %}
+        <tr>
+          <td data-label="Employee">
+            <div class="roster-person">
+              <strong>{{ e.name }}</strong>
+              <span class="muted">@{{ e.username }}</span>
+            </div>
+          </td>
+          <td data-label="Contact">
+            <div class="roster-field-stack">
+              <label><span>Email<span class="sr-only"> for {{ e.name }}</span></span><input id="email-{{ e.id }}" form="roster-save" type="email" name="email_{{ e.id }}" value="{{ e.email or '' }}" placeholder="Email"></label>
+              <label><span>Phone<span class="sr-only"> for {{ e.name }}</span></span><input id="phone-{{ e.id }}" form="roster-save" type="tel" name="phone_{{ e.id }}" value="{{ e.phone or '' }}" placeholder="+15551234567"></label>
+            </div>
+          </td>
+          <td data-label="Placement">
+            <div class="roster-field-stack">
+              <label><span>House<span class="sr-only"> for {{ e.name }}</span></span><select id="station-{{ e.id }}" form="roster-save" name="station_{{ e.id }}">
+                <option value="front" {% if e.station == 'front' %}selected{% endif %}>Front of house</option>
+                <option value="back" {% if e.station == 'back' %}selected{% endif %}>Back of house</option>
+                <option value="both" {% if e.station == 'both' %}selected{% endif %}>Both FOH and BOH</option>
+              </select></label>
+              <label><span>Employment type<span class="sr-only"> for {{ e.name }}</span></span><select id="type-{{ e.id }}" form="roster-save" name="type_{{ e.id }}">
+                <option value="full_time" {% if e.employment_type == 'full_time' %}selected{% endif %}>Full-time</option>
+                <option value="part_time" {% if e.employment_type != 'full_time' %}selected{% endif %}>Part-time</option>
+              </select></label>
+            </div>
+          </td>
+          <td data-label="Scheduling limits">
+            <div class="roster-field-stack">
+              <label><span>Weekly cap<span class="sr-only"> for {{ e.name }}</span></span><input id="cap-{{ e.id }}" form="roster-save" type="number" name="cap_{{ e.id }}" value="{{ e.weekly_hours or 40 }}" min="1" max="168"></label>
+              <label><span>Hired<span class="sr-only"> for {{ e.name }}</span></span><input id="hired-{{ e.id }}" form="roster-save" type="date" name="hired_{{ e.id }}" value="{{ e.hired_on or '' }}"></label>
+            </div>
+          </td>
+          <td data-label="Account actions">
+            <div class="roster-actions">
+              <span class="roster-action-label">Schedule link</span>
+              <form method="post" action="{{ url_for('send_employee_schedule_link', user_id=e.id) }}" class="roster-link-actions">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <button class="btn sm ghost" name="channel" value="email" {% if not e.email %}disabled title="Add an email address first"{% endif %}>Email link</button>
+                <button class="btn sm ghost" name="channel" value="sms" {% if not e.phone %}disabled title="Add a phone number first"{% endif %}>Text link</button>
+              </form>
+              <button class="btn sm ghost" type="button" onclick="document.getElementById('password-dialog-{{ e.id }}').showModal()">Reset password</button>
+              <dialog id="password-dialog-{{ e.id }}">
+                <form method="post" action="{{ url_for('reset_employee_password', user_id=e.id) }}">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                  <h2>Reset password for {{ e.name }}</h2>
+                  <p class="muted">Set a temporary password of at least 12 characters, then share it securely.</p>
+                  <label>New password<input name="password" type="password" minlength="12" autocomplete="new-password" placeholder="New password (12+ characters)" required></label>
+                  <label>Confirm new password<input name="confirm_password" type="password" minlength="12" autocomplete="new-password" placeholder="Confirm new password" required></label>
+                  <div class="dialog-actions">
+                    <button class="btn sm ghost" type="button" onclick="this.closest('dialog').close()">Cancel</button>
+                    <button class="btn sm">Save password</button>
+                  </div>
+                </form>
+              </dialog>
+              {# window.confirm, not confirm: the hidden input named "confirm" shadows the global inside form handlers. Name comes from data-name so it is never interpolated into JS. #}
+              <form method="post" action="{{ url_for('delete_employee', user_id=e.id) }}" data-name="{{ e.name }}" onsubmit="return window.confirm('Permanently delete ' + this.dataset.name + ' and their schedule history?')">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="confirm" value="yes">
+                <button class="btn sm danger">Delete employee</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="muted roster-empty">No employees yet. Add the first employee above.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if employees %}
+    <div class="roster-save-footer"><button class="btn" type="submit" form="roster-save">Save roster</button></div>
+    {% endif %}
+  </section>
+
+  <p class="muted roster-footer-note">Passwords are stored as hashes and cannot be viewed. Set a new temporary password here if an employee needs a reset.</p>
 </div>
-<p style="margin-top:14px"><button class="btn" type="submit" form="roster-save">Save roster</button>
-<span class="muted" style="margin-left:8px">Saving re-runs the auto-assigner with the new lineup.</span></p>
-<p class="muted">Passwords are stored as hashes and cannot be viewed. Set a new temporary password here if an employee needs a reset, then share it with them securely.</p>
 {% endblock %}
