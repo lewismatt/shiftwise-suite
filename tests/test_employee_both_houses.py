@@ -137,6 +137,8 @@ def test_invalid_preference_submit_returns_to_the_calendar():
     followed = client.post("/pick", data={"rank_1": "1"}, follow_redirects=True)
     assert b"Rank every shift in each scheduled week." in followed.data
     assert b'id="preference-form"' in followed.data
+
+
 def test_both_house_employee_can_filter_dashboard_shifts_by_house():
     appmod.init_db(seed_demo=True)
     week = appmod.monday_of(appmod.date.today()).isoformat()
@@ -179,4 +181,3 @@ def test_both_house_employee_can_filter_dashboard_shifts_by_house():
     parser = ScheduledShiftRows()
     parser.feed(invalid.get_data(as_text=True))
     assert parser.shift_ids == [chosen["front"]]
-

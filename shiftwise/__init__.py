@@ -86,11 +86,7 @@ def create_app(config_class=Config):
                 conn.close()
             if user and user["time_format"] in ("12h", "24h"):
                 time_format = user["time_format"]
-            if (
-                user
-                and user["role"] == "employee"
-                and user["background_palette"] in PALETTES_BY_ID
-            ):
+            if user and user["role"] == "employee" and user["background_palette"] in PALETTES_BY_ID:
                 background_palette = user["background_palette"]
         return {
             "time_format": time_format,

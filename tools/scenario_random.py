@@ -208,8 +208,9 @@ def run_random():
             + ") ORDER BY week_start, id",
             (WEEK, NEXT_WEEK, *areas),
         )
-        by_week = {week: [row for row in shifts if row["week_start"] == week]
-                   for week in (WEEK, NEXT_WEEK)}
+        by_week = {
+            week: [row for row in shifts if row["week_start"] == week] for week in (WEEK, NEXT_WEEK)
+        }
         form = {}
         for week, week_shifts in by_week.items():
             rng.shuffle(week_shifts)
@@ -224,9 +225,7 @@ def run_random():
                 index = both_users.index(u)
                 priority_ids = [by_area["front"][index], by_area["back"][index]]
                 ordered_ids = priority_ids + [sid for sid in ordered_ids if sid not in priority_ids]
-            form.update(
-                {f"rank_{sid}": str(rank) for rank, sid in enumerate(ordered_ids, 1)}
-            )
+            form.update({f"rank_{sid}": str(rank) for rank, sid in enumerate(ordered_ids, 1)})
         login(u)
         r = client.post("/pick", data=form, follow_redirects=True)
         assert b"Preferences saved" in r.data, f"pick rejected for {u}"
@@ -245,10 +244,7 @@ def run_random():
     conn.close()
     appmod.run_scheduler(WEEK)
     for u in both_users:
-        assigned_areas = {
-            row["area"]
-            for row in holding(u, OK_STATUSES)
-        }
+        assigned_areas = {row["area"] for row in holding(u, OK_STATUSES)}
         assert assigned_areas == {"front", "back"}, (
             f"both-house employee {u} must get FOH and BOH shifts; got {assigned_areas}"
         )
