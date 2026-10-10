@@ -57,6 +57,6 @@ All ShiftWise configuration is driven through environment variables prefixed wit
 
 | Variable | Type | Default Value | Used In | Description |
 |---|---|---|---|---|
-| `TEST_DATABASE_URL` | URL | `DATABASE_URL` | `tools/run_all.sh`, PostgreSQL tests | Dedicated test database. Tests reset application tables; never use working or production data. |
+| `TEST_DATABASE_URL` | URL | `DATABASE_URL` | `tools/run_all.sh`, PostgreSQL tests | Dedicated test database, selected before application import; overrides `DATABASE_URL` and `POSTGRES_PASSWORD_FILE` for pytest. An empty value is rejected. With a password file configured, this variable is required. Tests reset application tables; never use working or production data. |
 | `SHIFTWISE_SCENARIO_DATABASE_URL` | URL | `DATABASE_URL` | `gauntlet.py`, `scenario_demo.py`, `scenario_random.py` | Simulation database; each run creates a unique retained schema. Gauntlet/demo also accept `--database-url`. The role needs `CREATE` on the database. |
 | `SHIFTWISE_LIVEWEEK_DATABASE_URL` | URL | `DATABASE_URL` | `liveweek.py` | Liveweek database; `--database-url` takes precedence. Each run creates a unique retained schema. |
