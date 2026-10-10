@@ -23,15 +23,15 @@
     <form method="post" action="{{ url_for('add_employee') }}" class="roster-add-form">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
       <div class="roster-form-grid">
-        <label>Full name<input name="name" placeholder="Alex Rivera" required></label>
-        <label>Username<input name="username" placeholder="alex.rivera" required></label>
-        <label>Initial password<input name="password" type="password" placeholder="12+ characters" minlength="12" required></label>
-        <label>Email <span class="field-optional">optional</span><input name="email" type="email" placeholder="alex@example.com"></label>
-        <label>Phone <span class="field-optional">optional</span><input name="phone" type="tel" placeholder="+15551234567"></label>
-        <label>Employment type<select name="employment_type"><option value="full_time">Full-time</option><option value="part_time">Part-time</option></select></label>
-        <label>House<select name="station"><option value="front">Front of house</option><option value="back">Back of house</option><option value="both">Both FOH and BOH</option></select></label>
-        <label>Hire date <span class="field-optional">optional</span><input name="hired_on" type="date"></label>
-        <label>Weekly hours cap<input name="weekly_hours" type="number" value="40" min="1" max="168" required></label>
+        <label><span>Full name</span><input name="name" placeholder="Alex Rivera" required></label>
+        <label><span>Username</span><input name="username" placeholder="alex.rivera" required></label>
+        <label><span>Initial password</span><input name="password" type="password" placeholder="12+ characters" minlength="12" required></label>
+        <label><span>Email <span class="field-optional">optional</span></span><input name="email" type="email" placeholder="alex@example.com"></label>
+        <label><span>Phone <span class="field-optional">optional</span></span><input name="phone" type="tel" placeholder="+15551234567"></label>
+        <label><span>Employment type</span><select name="employment_type"><option value="full_time">Full-time</option><option value="part_time">Part-time</option></select></label>
+        <label><span>House</span><select name="station"><option value="front">Front of house</option><option value="back">Back of house</option><option value="both">Both FOH and BOH</option></select></label>
+        <label><span>Hire date <span class="field-optional">optional</span></span><input name="hired_on" type="date"></label>
+        <label><span>Weekly hours cap</span><input name="weekly_hours" type="number" value="40" min="1" max="168" required></label>
       </div>
       <div class="roster-form-footer">
         <p class="muted">Use an international phone number, such as +15551234567. Delivery also requires the app's public HTTPS URL and configured email or text settings.</p>
@@ -44,7 +44,7 @@
     <div class="section-heading roster-section-heading">
       <div>
         <h2 id="current-roster-heading">Current roster</h2>
-        <p class="muted">Update contact details, placement, and weekly limits. Saving re-runs the auto-assigner.</p>
+        <p class="muted">Update contact details, placement, and weekly limits. Employees set to both houses can rank and be scheduled for shifts in either area. The scheduler never schedules anyone past their weekly cap. Saving re-runs the auto-assigner.</p>
       </div>
       <button class="btn" type="submit" form="roster-save">Save roster</button>
     </div>
@@ -69,31 +69,27 @@
           </td>
           <td data-label="Contact">
             <div class="roster-field-stack">
-              <label class="sr-only" for="email-{{ e.id }}">Email for {{ e.name }}</label>
-              <input id="email-{{ e.id }}" form="roster-save" type="email" name="email_{{ e.id }}" value="{{ e.email or '' }}" placeholder="Email">
-              <label class="sr-only" for="phone-{{ e.id }}">Phone for {{ e.name }}</label>
-              <input id="phone-{{ e.id }}" form="roster-save" type="tel" name="phone_{{ e.id }}" value="{{ e.phone or '' }}" placeholder="+15551234567">
+              <label><span>Email<span class="sr-only"> for {{ e.name }}</span></span><input id="email-{{ e.id }}" form="roster-save" type="email" name="email_{{ e.id }}" value="{{ e.email or '' }}" placeholder="Email"></label>
+              <label><span>Phone<span class="sr-only"> for {{ e.name }}</span></span><input id="phone-{{ e.id }}" form="roster-save" type="tel" name="phone_{{ e.id }}" value="{{ e.phone or '' }}" placeholder="+15551234567"></label>
             </div>
           </td>
           <td data-label="Placement">
             <div class="roster-field-stack">
-              <label class="sr-only" for="station-{{ e.id }}">House for {{ e.name }}</label>
-              <select id="station-{{ e.id }}" form="roster-save" name="station_{{ e.id }}">
+              <label><span>House<span class="sr-only"> for {{ e.name }}</span></span><select id="station-{{ e.id }}" form="roster-save" name="station_{{ e.id }}">
                 <option value="front" {% if e.station == 'front' %}selected{% endif %}>Front of house</option>
                 <option value="back" {% if e.station == 'back' %}selected{% endif %}>Back of house</option>
                 <option value="both" {% if e.station == 'both' %}selected{% endif %}>Both FOH and BOH</option>
-              </select>
-              <label class="sr-only" for="type-{{ e.id }}">Employment type for {{ e.name }}</label>
-              <select id="type-{{ e.id }}" form="roster-save" name="type_{{ e.id }}">
+              </select></label>
+              <label><span>Employment type<span class="sr-only"> for {{ e.name }}</span></span><select id="type-{{ e.id }}" form="roster-save" name="type_{{ e.id }}">
                 <option value="full_time" {% if e.employment_type == 'full_time' %}selected{% endif %}>Full-time</option>
                 <option value="part_time" {% if e.employment_type != 'full_time' %}selected{% endif %}>Part-time</option>
-              </select>
+              </select></label>
             </div>
           </td>
           <td data-label="Scheduling limits">
             <div class="roster-field-stack">
-              <label for="cap-{{ e.id }}">Weekly cap <input id="cap-{{ e.id }}" form="roster-save" type="number" name="cap_{{ e.id }}" value="{{ e.weekly_hours or 40 }}" min="1" max="168"></label>
-              <label for="hired-{{ e.id }}">Hired <input id="hired-{{ e.id }}" form="roster-save" type="date" name="hired_{{ e.id }}" value="{{ e.hired_on or '' }}"></label>
+              <label><span>Weekly cap<span class="sr-only"> for {{ e.name }}</span></span><input id="cap-{{ e.id }}" form="roster-save" type="number" name="cap_{{ e.id }}" value="{{ e.weekly_hours or 40 }}" min="1" max="168"></label>
+              <label><span>Hired<span class="sr-only"> for {{ e.name }}</span></span><input id="hired-{{ e.id }}" form="roster-save" type="date" name="hired_{{ e.id }}" value="{{ e.hired_on or '' }}"></label>
             </div>
           </td>
           <td data-label="Account actions">
@@ -110,15 +106,16 @@
                   <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                   <h2>Reset password for {{ e.name }}</h2>
                   <p class="muted">Set a temporary password of at least 12 characters, then share it securely.</p>
-                  <label>New password<input name="password" type="password" minlength="12" autocomplete="new-password" placeholder="New password (12+ characters)" required aria-label="New password for {{ e.name }}"></label>
-                  <label>Confirm new password<input name="confirm_password" type="password" minlength="12" autocomplete="new-password" placeholder="Confirm new password" required aria-label="Confirm new password for {{ e.name }}"></label>
+                  <label>New password<input name="password" type="password" minlength="12" autocomplete="new-password" placeholder="New password (12+ characters)" required></label>
+                  <label>Confirm new password<input name="confirm_password" type="password" minlength="12" autocomplete="new-password" placeholder="Confirm new password" required></label>
                   <div class="dialog-actions">
                     <button class="btn sm ghost" type="button" onclick="this.closest('dialog').close()">Cancel</button>
                     <button class="btn sm">Save password</button>
                   </div>
                 </form>
               </dialog>
-              <form method="post" action="{{ url_for('delete_employee', user_id=e.id) }}" onsubmit="return window.confirm('Permanently delete this employee and their schedule history?')">
+              {# window.confirm, not confirm: the hidden input named "confirm" shadows the global inside form handlers. Name comes from data-name so it is never interpolated into JS. #}
+              <form method="post" action="{{ url_for('delete_employee', user_id=e.id) }}" data-name="{{ e.name }}" onsubmit="return window.confirm('Permanently delete ' + this.dataset.name + ' and their schedule history?')">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
                 <input type="hidden" name="confirm" value="yes">
                 <button class="btn sm danger">Delete employee</button>
@@ -132,6 +129,9 @@
         </tbody>
       </table>
     </div>
+    {% if employees %}
+    <div class="roster-save-footer"><button class="btn" type="submit" form="roster-save">Save roster</button></div>
+    {% endif %}
   </section>
 
   <p class="muted roster-footer-note">Passwords are stored as hashes and cannot be viewed. Set a new temporary password here if an employee needs a reset.</p>
