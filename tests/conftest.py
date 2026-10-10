@@ -1,5 +1,6 @@
 """Pytest configuration and shared fixtures for ShiftWise test suite."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,20 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from test_support import truncate_postgres_tables
+
+# Choose the destructive test target before importing the application: app import
+# opens a connection, and schema initialization / TRUNCATE use DATABASE_URL.
+_test_url = os.environ.get("TEST_DATABASE_URL")
+if _test_url is not None:
+    if not _test_url.strip():
+        raise pytest.UsageError("TEST_DATABASE_URL must identify a disposable PostgreSQL database.")
+    os.environ["DATABASE_URL"] = _test_url.strip()
+    # The runtime secret-file override otherwise ignores DATABASE_URL entirely.
+    os.environ.pop("POSTGRES_PASSWORD_FILE", None)
+elif os.environ.get("POSTGRES_PASSWORD_FILE"):
+    raise pytest.UsageError(
+        "Set TEST_DATABASE_URL to a disposable database when POSTGRES_PASSWORD_FILE is configured."
+    )
 
 import app as appmod
 from shiftwise.security import use_csrf_aware_test_client
