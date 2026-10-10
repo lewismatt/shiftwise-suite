@@ -94,6 +94,71 @@ def test_invalid_clock_format_does_not_change_saved_preference():
     assert b"Choose either 12-hour or 24-hour time" in response.data
 
 
+def test_employee_can_save_and_keep_one_of_the_example_background_palettes():
+    _init_demo(appmod)
+    client = appmod.app.test_client()
+    _login(client)
+
+    settings = client.get("/settings")
+    assert b"Charizard" in settings.data
+    assert b"Forest &amp; sage" in settings.data
+    assert b"Midnight lavender" in settings.data
+    assert b"Bright teal" in settings.data
+
+    response = client.post(
+        "/settings",
+        data={"action": "background_palette", "background_palette": "forest-sage"},
+        follow_redirects=True,
+    )
+    conn = appmod.db()
+    row = conn.execute("SELECT background_palette FROM users WHERE username='alex'").fetchone()
+    conn.close()
+
+    assert response.status_code == 200
+    assert b"Background theme saved" in response.data
+    assert row["background_palette"] == "forest-sage"
+    page = client.get("/calendar").data
+    assert page.rfind(b"--bg:#0d1712") > page.find(b"--bg: #0b1526")
+
+
+def test_employee_cannot_save_an_unlisted_background_palette():
+    _init_demo(appmod)
+    client = appmod.app.test_client()
+    _login(client)
+
+    response = client.post(
+        "/settings",
+        data={"action": "background_palette", "background_palette": "url(javascript:bad)"},
+        follow_redirects=True,
+    )
+    conn = appmod.db()
+    row = conn.execute("SELECT background_palette FROM users WHERE username='alex'").fetchone()
+    conn.close()
+
+    assert response.status_code == 200
+    assert b"Choose one of the available background themes" in response.data
+    assert row["background_palette"] == "shiftwise"
+
+
+def test_manager_does_not_receive_or_change_an_employee_background_palette():
+    _init_demo(appmod)
+    client = appmod.app.test_client()
+    _login(client, "manager")
+
+    settings = client.get("/settings")
+    response = client.post(
+        "/settings",
+        data={"action": "background_palette", "background_palette": "bright-teal"},
+    )
+    conn = appmod.db()
+    row = conn.execute("SELECT background_palette FROM users WHERE username='manager'").fetchone()
+    conn.close()
+
+    assert b"Background color" not in settings.data
+    assert response.status_code == 403
+    assert row["background_palette"] == "shiftwise"
+
+
 def test_clock_formatter_handles_noon_midnight_and_afternoon():
     _init_demo(appmod)
     client = appmod.app.test_client()

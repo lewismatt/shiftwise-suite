@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  .theme-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; border: 0; padding: 0; margin: 0; }
+  .theme-choice { display: grid; grid-template-columns: 20px 1fr; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px; cursor: pointer; }
+  .theme-choice:has(input:checked) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .theme-choice input { width: 18px; height: 18px; padding: 0; margin: 0; border-radius: 50%; accent-color: var(--accent); }
+  .theme-sample { min-height: 48px; border-radius: 7px; padding: 7px 9px; display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 12px; }
+  .theme-dot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid currentColor; }
+</style>
 <h1 class="page-title">General Settings</h1>
 <div style="display:grid; gap:18px; max-width:760px; margin-top:18px">
   <section class="card">
@@ -16,6 +24,31 @@
       <button class="btn" type="submit">Save account details</button>
     </form>
   </section>
+
+  {% if session.role == 'employee' %}
+  <section class="card">
+    <h2 style="margin-top:4px">Background color</h2>
+    <p class="muted">Choose a saved color example. Your choice only changes your own view.</p>
+    <form method="post" action="{{ url_for('settings') }}" style="display:grid; gap:10px">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="background_palette">
+      <fieldset class="theme-options" aria-label="Choose a background theme">
+        {% for palette in palettes %}
+        <label class="theme-choice">
+          <input type="radio" name="background_palette" value="{{ palette.id }}" {% if user.background_palette == palette.id %}checked{% endif %} required>
+          <span>
+            <span class="theme-sample" style="background:{{ palette.colors.background }};color:{{ palette.colors.text }}">
+              {{ palette.name }}<span class="theme-dot" style="background:{{ palette.colors.accent }}"></span>
+            </span>
+            <span class="muted">{{ palette.mood }}</span>
+          </span>
+        </label>
+        {% endfor %}
+      </fieldset>
+      <button class="btn" type="submit">Save background color</button>
+    </form>
+  </section>
+  {% endif %}
 
   <section class="card">
     <h2 style="margin-top:4px">Clock format</h2>

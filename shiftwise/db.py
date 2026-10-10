@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS users (
     station TEXT NOT NULL DEFAULT 'front',
     email TEXT,
     phone TEXT,
-    time_format TEXT NOT NULL DEFAULT '24h'
+    time_format TEXT NOT NULL DEFAULT '24h',
+    background_palette TEXT NOT NULL DEFAULT 'shiftwise'
 );
 CREATE TABLE IF NOT EXISTS shifts (
     id BIGSERIAL PRIMARY KEY,
@@ -783,6 +784,11 @@ def init_db(seed_demo=False, mock_roster=False):
     try:
         for statement in _split_ddl(POSTGRES_SCHEMA):
             execute_sql(conn, statement)
+        execute_sql(
+            conn,
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+            "background_palette TEXT NOT NULL DEFAULT 'shiftwise'",
+        )
         # The schema must be committed before the mock-seed handoff below:
         # _seed_if_empty closes this lease and mock_seed.seed() opens its
         # own pooled connection, which would otherwise roll the uncommitted
