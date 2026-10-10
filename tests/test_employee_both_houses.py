@@ -165,8 +165,21 @@ def test_both_house_employee_can_filter_dashboard_shifts_by_house():
 
     client = appmod.app.test_client()
     client.post("/login", data={"username": "alex", "password": "alex"})
+    # Default view without house param shows both houses
+    default_page = client.get("/")
+    assert default_page.status_code == 200
+    default_html = default_page.get_data(as_text=True)
+    assert 'name="house"' in default_html
+    assert 'class="dashboard-house-select"' in default_html
+    assert '<option value="both" selected' in default_html
+    assert "front and back of house" in default_html
+    default_parser = ScheduledShiftRows()
+    default_parser.feed(default_html)
+    assert set(default_parser.shift_ids) == set(chosen.values())
+
+    # Filtering by front and back specifically
     for area in ("front", "back"):
-        page = client.get("/" if area == "front" else "/?house=back")
+        page = client.get(f"/?house={area}")
         assert page.status_code == 200
         html = page.get_data(as_text=True)
         assert 'name="house"' in html
@@ -177,7 +190,20 @@ def test_both_house_employee_can_filter_dashboard_shifts_by_house():
         parser.feed(html)
         assert parser.shift_ids == [chosen[area]]
 
+    # Explicit both selection
+    both_page = client.get("/?house=both")
+    assert both_page.status_code == 200
+    both_html = both_page.get_data(as_text=True)
+    assert '<option value="both" selected' in both_html
+    both_parser = ScheduledShiftRows()
+    both_parser.feed(both_html)
+    assert set(both_parser.shift_ids) == set(chosen.values())
+
+    # Invalid house param falls back to both
     invalid = client.get("/?house=invalid")
+    assert invalid.status_code == 200
+    invalid_html = invalid.get_data(as_text=True)
+    assert '<option value="both" selected' in invalid_html
     parser = ScheduledShiftRows()
-    parser.feed(invalid.get_data(as_text=True))
-    assert parser.shift_ids == [chosen["front"]]
+    parser.feed(invalid_html)
+    assert set(parser.shift_ids) == set(chosen.values())
