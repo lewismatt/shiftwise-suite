@@ -475,6 +475,107 @@
   .login-card .btn { width: 100%; padding: 11px; font-size: 15px; }
   footer { text-align: center; color: var(--dim); font-size: 12px; margin: 40px 0 18px; }
 
+  /* ---------- roster ---------- */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .roster-heading,
+  .section-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+  }
+  .roster-heading { margin-bottom: 20px; }
+  .roster-heading .muted,
+  .section-heading .muted { margin: 2px 0 0; }
+  .roster-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+  .roster-stat {
+    min-width: 94px;
+    padding: 10px 14px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+  }
+  .roster-stat strong,
+  .roster-stat span { display: block; }
+  .roster-stat strong { color: var(--ink); font-size: 20px; line-height: 1.2; }
+  .roster-stat span {
+    color: var(--dim);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    margin-top: 3px;
+  }
+  .roster-add { margin-bottom: 28px; }
+  .roster-add h2,
+  .roster-section h2 { margin-top: 0; margin-bottom: 4px; }
+  .roster-add-form { margin-top: 18px; }
+  .roster-form-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .roster-form-grid label,
+  .roster-field-stack label,
+  dialog label {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    color: var(--dim);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .field-optional { color: var(--dim); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+  .roster-form-grid input,
+  .roster-form-grid select { width: 100%; }
+  .roster-form-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin-top: 18px;
+  }
+  .roster-form-footer p { margin: 0; max-width: 780px; }
+  .roster-section-heading { align-items: center; margin-bottom: 12px; }
+  .roster-section-heading .btn { flex-shrink: 0; }
+  .roster-table { table-layout: fixed; }
+  .roster-table th:nth-child(1) { width: 17%; }
+  .roster-table th:nth-child(2) { width: 22%; }
+  .roster-table th:nth-child(3) { width: 20%; }
+  .roster-table th:nth-child(4) { width: 18%; }
+  .roster-table th:nth-child(5) { width: 23%; }
+  .roster-person { display: flex; flex-direction: column; gap: 2px; }
+  .roster-person strong { color: var(--text); }
+  .roster-field-stack { display: flex; flex-direction: column; gap: 8px; }
+  .roster-field-stack input,
+  .roster-field-stack select { width: 100%; min-width: 0; }
+  .roster-field-stack label { color: var(--dim); font-size: 10px; letter-spacing: .03em; }
+  .roster-field-stack label input { margin-top: 2px; }
+  .roster-actions { display: flex; flex-direction: column; align-items: stretch; gap: 7px; }
+  .roster-action-label { color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+  .roster-link-actions { display: flex; gap: 6px; }
+  .roster-link-actions .btn { flex: 1; }
+  .btn.danger { background: transparent; border: 1px solid #7d3540; color: #ff9da9; }
+  .btn.danger:hover { background: #3a1b25; box-shadow: none; }
+  dialog h2 { margin-top: 0; }
+  dialog form > label { margin-top: 12px; }
+  dialog form > label input { width: 100%; margin-top: 2px; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .roster-empty { padding: 28px 14px; text-align: center; }
+  .roster-footer-note { margin-top: 16px; }
   /* ---------- responsive & mobile (< 769px) ---------- */
   @media (max-width: 768px) {
     nav { padding: 0 16px; }
@@ -690,17 +791,9 @@
     .roster-table,
     .roster-table tbody,
     .roster-table tr,
-    .roster-table td {
-      display: block;
-    }
-    .roster-table tr:first-child {
-      display: none;
-    }
-    .roster-table {
-      border: none;
-      background: transparent;
-      box-shadow: none;
-    }
+    .roster-table td { display: block; }
+    .roster-table thead { display: none; }
+    .roster-table { border: none; background: transparent; box-shadow: none; }
     .roster-table tr {
       background: var(--card);
       border: 1px solid var(--line);
@@ -709,54 +802,38 @@
       padding: 16px;
       box-shadow: var(--shadow);
     }
-    .roster-table td {
-      padding: 8px 0;
-      border-bottom: 1px solid rgba(36, 52, 77, 0.45);
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-    }
+    .roster-table td { padding: 10px 0; border-bottom: 1px solid rgba(36, 52, 77, 0.45); }
     .roster-table td::before {
       content: attr(data-label);
+      display: block;
       color: var(--dim);
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: .05em;
+      margin-bottom: 6px;
     }
     .roster-table td[data-label="Employee"] {
       border-bottom: 1px solid var(--line);
       padding-top: 0;
-      padding-bottom: 10px;
+      padding-bottom: 12px;
       font-size: 16px;
     }
-    .roster-table td[data-label="Employee"]::before {
-      display: none;
-    }
+    .roster-table td[data-label="Employee"]::before { display: none; }
     .roster-table input,
-    .roster-table select {
-      width: 100% !important;
-      min-width: 0;
-    }
-    .roster-table td:last-child {
-      border-bottom: none;
-      padding-top: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .roster-table td:last-child form {
-      display: grid !important;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px !important;
-      margin: 0 !important;
-    }
-    .roster-table td:last-child form button {
-      width: 100%;
-    }
-    .roster-table td:last-child > button {
-      width: 100%;
-    }
+    .roster-table select { width: 100% !important; min-width: 0; }
+    .roster-table td:last-child { border-bottom: none; padding-top: 14px; }
+    .roster-actions { gap: 9px; }
+    .roster-link-actions { display: grid; grid-template-columns: 1fr 1fr; }
+    .roster-actions .btn { width: 100%; }
+    .roster-heading,
+    .section-heading { display: block; }
+    .roster-stats { margin-top: 16px; }
+    .roster-stat { flex: 1; min-width: 0; }
+    .roster-form-grid { grid-template-columns: 1fr; }
+    .roster-form-footer { align-items: stretch; flex-direction: column; }
+    .roster-form-footer .btn { width: 100%; }
+    .roster-section-heading .btn { width: 100%; margin-top: 14px; }
 
     /* Requests table card transform on mobile */
     .requests-table,
@@ -859,26 +936,15 @@
 
   /* Desktop tablet tweaks (>= 769px) */
   @media (min-width: 769px) {
-    .roster-add { padding: 12px 14px; margin-bottom: 12px !important; }
-    .roster-add h2 { margin-bottom: 8px; }
-    .roster-add input, .roster-add select { padding: 7px 9px; font-size: 13px; }
     .roster-table th, .roster-table td,
-    .requests-table th, .requests-table td { padding: 8px 10px; }
+    .requests-table th, .requests-table td { padding: 10px 12px; }
     .roster-table th { font-size: 10.5px; }
-    .roster-table td { font-size: 12.5px; }
-    .roster-table input, .roster-table select { width: 100%; min-width: 0; padding: 6px 7px; font-size: 12px; }
-    .roster-table td:last-child form { gap: 4px !important; margin-bottom: 4px !important; }
-    .roster-table td:last-child .btn { padding: 6px 8px; font-size: 11px; white-space: nowrap; }
-    .roster-table td:last-child input { flex: 1 1 120px; }
+    .roster-table td { font-size: 13px; vertical-align: top; }
+    .roster-table input, .roster-table select { padding: 7px 8px; font-size: 12.5px; }
+    .roster-actions .btn { padding: 7px 9px; font-size: 11.5px; }
     .requests-table { table-layout: auto; }
     .requests-table td:last-child { white-space: nowrap; }
     .requests-table td:last-child form { margin-right: 4px; }
-    .form-grid-add {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
   }
 </style>
 </head>
