@@ -1,10 +1,9 @@
-"""Curated per-user color palettes based on the saved theme examples."""
+"""Curated per-user color palettes.
 
-import json
-from pathlib import Path
-
-_PALETTE_FILE = Path(__file__).resolve().parents[1] / "docs" / "theme-palettes.json"
-_PALETTE_DATA = json.loads(_PALETTE_FILE.read_text(encoding="utf-8"))
+The palette catalog is embedded directly as Python data so the runtime has
+no dependency on the docs/ directory (which is not copied into the Docker
+image). docs/theme-palettes.json remains as the human-readable design record.
+"""
 
 # The original ShiftWise palette remains the default and an explicit choice.
 SHIFTWISE = {
@@ -25,11 +24,109 @@ SHIFTWISE = {
         "border": "#24344d",
         "success": "#4dd88a",
         "warning": "#ffcf5f",
+        "warn_contrast": "#081020",
         "error": "#ff5a4d",
         "teal_highlight": "#35d4c0",
     },
 }
-PALETTES = (SHIFTWISE, *_PALETTE_DATA["palettes"])
+
+CHARIZARD = {
+    "id": "charizard",
+    "name": "Charizard",
+    "mood": "Ember orange, charred night, teal highlights",
+    "colors": {
+        "background": "#170c08",
+        "surface": "#24130d",
+        "surface_soft": "#30190f",
+        "nav_background": "#0e0604",
+        "accent": "#ff8a3d",
+        "accent_dark": "#d96524",
+        "accent_soft": "#3b1d11",
+        "heading": "#ffb347",
+        "text": "#f2e6d8",
+        "muted": "#a67a5c",
+        "border": "#5c2e1a",
+        "success": "#7ddd7d",
+        "warning": "#ffcf5f",
+        "warn_contrast": "#0e0604",
+        "error": "#ff5a4d",
+        "teal_highlight": "#5fd7c9",
+    },
+}
+
+FOREST_SAGE = {
+    "id": "forest-sage",
+    "name": "Forest & sage",
+    "mood": "Evergreen, fresh sage, warm gold status accents",
+    "colors": {
+        "background": "#0d1712",
+        "surface": "#14231b",
+        "surface_soft": "#1b2d22",
+        "nav_background": "#09100c",
+        "accent": "#81c784",
+        "accent_dark": "#559b60",
+        "accent_soft": "#20372a",
+        "heading": "#d3dfb4",
+        "text": "#e2eadf",
+        "muted": "#91a491",
+        "border": "#304638",
+        "success": "#8bd49a",
+        "warning": "#e8c66a",
+        "warn_contrast": "#09100c",
+        "error": "#ef766c",
+        "teal_highlight": "#89cdb8",
+    },
+}
+
+MIDNIGHT_LAVENDER = {
+    "id": "midnight-lavender",
+    "name": "Midnight lavender",
+    "mood": "Ink violet, soft lilac, mint status accents",
+    "colors": {
+        "background": "#11101a",
+        "surface": "#1a1927",
+        "surface_soft": "#232235",
+        "nav_background": "#0c0b13",
+        "accent": "#a78bfa",
+        "accent_dark": "#8064d8",
+        "accent_soft": "#29243b",
+        "heading": "#d9ccff",
+        "text": "#ece9f5",
+        "muted": "#a09ab4",
+        "border": "#38334e",
+        "success": "#70d6a0",
+        "warning": "#ffd166",
+        "warn_contrast": "#0c0b13",
+        "error": "#ff7777",
+        "teal_highlight": "#86d6d0",
+    },
+}
+
+BRIGHT_TEAL = {
+    "id": "bright-teal",
+    "name": "Bright teal",
+    "mood": "Cool white, deep teal, clear high-contrast actions",
+    "colors": {
+        "background": "#f4f6f8",
+        "surface": "#ffffff",
+        "surface_soft": "#edf1f5",
+        "nav_background": "#ffffff",
+        "accent": "#176b87",
+        "accent_dark": "#10556d",
+        "accent_soft": "#dcecf1",
+        "heading": "#173e53",
+        "text": "#263744",
+        "muted": "#70808c",
+        "border": "#d8e0e6",
+        "success": "#26845e",
+        "warning": "#a86b00",
+        "warn_contrast": "#263744",
+        "error": "#b33d39",
+        "teal_highlight": "#2797a4",
+    },
+}
+
+PALETTES = (SHIFTWISE, CHARIZARD, FOREST_SAGE, MIDNIGHT_LAVENDER, BRIGHT_TEAL)
 PALETTES_BY_ID = {palette["id"]: palette for palette in PALETTES}
 
 
@@ -51,6 +148,7 @@ def css_variables(palette_id):
         "--line": colors["border"],
         "--ok": colors["success"],
         "--warn": colors["warning"],
+        "--warn-contrast": colors["warn_contrast"],
         "--navy": colors["nav_background"],
         "--teal": colors["teal_highlight"],
         "--accent-contrast": colors["nav_background"],

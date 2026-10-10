@@ -139,9 +139,9 @@ def dashboard():
     display_weeks = [week] if session["role"] == "manager" else [week, next_week]
     week_placeholders = ",".join("?" for _ in display_weeks)
     my = g.current_user
-    display_area = request.args.get("house", "front") if my["station"] == "both" else my["station"]
-    if display_area not in ("front", "back"):
-        display_area = "front" if my["station"] == "both" else my["station"]
+    display_area = request.args.get("house", "both") if my["station"] == "both" else my["station"]
+    if display_area not in ("front", "back", "both"):
+        display_area = "both" if my["station"] == "both" else my["station"]
     shift_query = f"SELECT * FROM shifts WHERE week_start IN ({week_placeholders})"
     shift_params = tuple(display_weeks)
     if session["role"] != "manager":
