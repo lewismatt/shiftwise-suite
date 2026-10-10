@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from contextlib import closing
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from flask import (
     Blueprint,
@@ -112,51 +112,90 @@ def settings():
 @login_required()
 def dashboard():
     conn = db()
-    week = monday_of(date.today()).isoformat()
+    week_date = monday_of(date.today())
+    week = week_date.isoformat()
+    next_week = (week_date + timedelta(days=7)).isoformat()
+    display_weeks = [week] if session["role"] == "manager" else [week, next_week]
+    week_placeholders = ",".join("?" for _ in display_weeks)
     my = g.current_user
-    shift_query = "SELECT * FROM shifts WHERE week_start=?"
-    shift_params = (week,)
+    shift_query = f"SELECT * FROM shifts WHERE week_start IN ({week_placeholders})"
+    shift_params = tuple(display_weeks)
     if session["role"] != "manager":
-        shift_query += " AND area=?"
-        shift_params += (my["station"],)
+        areas = ("front", "back") if my["station"] == "both" else (my["station"],)
+        shift_query += " AND area IN (" + ",".join("?" for _ in areas) + ")"
+        shift_params += areas
     uid = session["uid"]
     try:
-        shifts, assignments, picks, preferences, staff, notifs, coworkers, coworker_shifts = (
-            read_queries(
-                conn,
-                [
-                    (shift_query + " ORDER BY id", shift_params),
-                    ("SELECT shift_id, status FROM assignments WHERE user_id=?", (uid,)),
-                    ("SELECT shift_id, rank FROM picks WHERE user_id=?", (uid,)),
-                    ("SELECT shift_id, willing FROM coverage_preferences WHERE user_id=?", (uid,)),
+        shifts, assignments, picks, preferences, staff, coworkers, coworker_shifts = read_queries(
+            conn,
+            [
+                (shift_query + " ORDER BY week_start, id", shift_params),
+                (
+                    "SELECT a.shift_id, a.status FROM assignments a JOIN shifts s ON s.id=a.shift_id "
+                    f"WHERE a.user_id=? AND s.week_start IN ({week_placeholders})",
+                    (uid, *display_weeks),
+                ),
+                (
+                    "SELECT p.shift_id, p.rank FROM picks p JOIN shifts s ON s.id=p.shift_id "
+                    f"WHERE p.user_id=? AND s.week_start IN ({week_placeholders})",
+                    (uid, *display_weeks),
+                ),
+                (
+                    "SELECT cp.shift_id, cp.willing FROM coverage_preferences cp "
+                    "JOIN shifts s ON s.id=cp.shift_id "
+                    f"WHERE cp.user_id=? AND s.week_start IN ({week_placeholders})",
+                    (uid, *display_weeks),
+                ),
+                (
+                    "SELECT a.shift_id, u.name FROM assignments a JOIN users u ON u.id=a.user_id "
+                    "JOIN shifts s ON s.id=a.shift_id "
+                    f"WHERE s.week_start IN ({week_placeholders}) "
+                    "AND a.status NOT IN ('sick','swap_requested')",
+                    tuple(display_weeks),
+                ),
+                (
+                    "SELECT id, name FROM users WHERE role='employee' AND "
+                    + (
+                        "station IN ('front','back','both') "
+                        if my["station"] == "both"
+                        else "station IN (?, 'both') "
+                    )
+                    + "AND id!=? ORDER BY name",
+                    ((uid,) if my["station"] == "both" else (my["station"], uid)),
+                ),
+                (
+                    "SELECT s.id, s.day, s.start_time, s.end_time, s.week_start, a.user_id, u.name "
+                    "FROM shifts s JOIN assignments a ON a.shift_id=s.id "
+                    "JOIN users u ON u.id=a.user_id "
+                    f"WHERE s.week_start IN ({week_placeholders}) AND s.area IN ("
+                    + ("?,?" if my["station"] == "both" else "?")
+                    + ") "
+                    "AND a.status NOT IN ('sick','swap_requested','manager_fixed','swap_invited') "
+                    "AND u.role='employee' AND u.id!=? ORDER BY s.week_start, u.name, s.id",
                     (
-                        "SELECT a.shift_id, u.name FROM assignments a JOIN users u ON u.id=a.user_id "
-                        "WHERE a.status NOT IN ('sick','swap_requested')",
-                        (),
+                        *display_weeks,
+                        *(("front", "back") if my["station"] == "both" else (my["station"],)),
+                        uid,
                     ),
-                    (
-                        "SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 20",
-                        (uid,),
-                    ),
-                    (
-                        "SELECT id, name FROM users WHERE role='employee' AND station=? "
-                        "AND id!=? ORDER BY name",
-                        (my["station"], uid),
-                    ),
-                    (
-                        "SELECT s.id, s.day, s.start_time, s.end_time, a.user_id, u.name "
-                        "FROM shifts s JOIN assignments a ON a.shift_id=s.id "
-                        "JOIN users u ON u.id=a.user_id WHERE s.week_start=? AND s.area=? "
-                        "AND a.status NOT IN ('sick','swap_requested','manager_fixed','swap_invited') "
-                        "AND u.role='employee' AND u.id!=? ORDER BY u.name, s.id",
-                        (week, my["station"], uid),
-                    ),
-                ],
-            )
+                ),
+            ],
         )
     finally:
         conn.close()
     my_assignments = {r["shift_id"]: r["status"] for r in assignments}
+    this_week_shifts = [
+        shift
+        for shift in shifts
+        if shift["week_start"] == week and my_assignments.get(shift["id"]) not in (None, "sick")
+    ]
+    hours_this_week = 0.0
+    for shift in this_week_shifts:
+        start = datetime.strptime(shift["start_time"], "%H:%M").time()
+        end = datetime.strptime(shift["end_time"], "%H:%M").time()
+        minutes = (
+            datetime.combine(date.today(), end) - datetime.combine(date.today(), start)
+        ).total_seconds() / 60
+        hours_this_week += (minutes if minutes >= 0 else minutes + 24 * 60) / 60
     my_picks = {r["shift_id"]: r["rank"] for r in picks}
     cover_prefs = {r["shift_id"]: r["willing"] for r in preferences}
     roster = defaultdict(list)
@@ -168,21 +207,51 @@ def dashboard():
         if my_assignments.get(shift["id"])
         not in (None, "sick", "swap_requested", "manager_fixed", "swap_invited")
     ]
+    swap_sources_by_week = defaultdict(list)
+    coworker_shifts_by_week = defaultdict(list)
+    for shift in my_swappable_shifts:
+        swap_sources_by_week[shift["week_start"]].append(shift)
+    for shift in coworker_shifts:
+        coworker_shifts_by_week[shift["week_start"]].append(shift)
+    swap_weeks = [
+        schedule_week
+        for schedule_week in display_weeks
+        if swap_sources_by_week[schedule_week] and coworker_shifts_by_week[schedule_week]
+    ]
     return render_template(
         "dashboard.html",
         shifts=shifts,
         DAYS=DAYS,
         week=week,
+        schedule_weeks=display_weeks,
         my_assignments=my_assignments,
         my_picks=my_picks,
         my_station=my["station"],
+        assigned_this_week=len(this_week_shifts),
+        hours_this_week=hours_this_week,
         roster=roster,
-        notifs=notifs,
         cover_prefs=cover_prefs,
         coworkers=coworkers,
         coworker_shifts=coworker_shifts,
         my_swappable_shifts=my_swappable_shifts,
+        swap_sources_by_week=swap_sources_by_week,
+        coworker_shifts_by_week=coworker_shifts_by_week,
+        swap_weeks=swap_weeks,
     )
+
+
+@employee_bp.route("/notifications", methods=["GET"])
+@login_required()
+def notifications():
+    conn = db()
+    try:
+        notifs = conn.execute(
+            "SELECT * FROM notifications WHERE user_id=? ORDER BY id DESC",
+            (session["uid"],),
+        ).fetchall()
+    finally:
+        conn.close()
+    return render_template("notifications.html", notifs=notifs)
 
 
 @employee_bp.route("/notifications/read-all", methods=["POST"])
@@ -194,7 +263,36 @@ def read_notifications():
         conn.commit()
     finally:
         conn.close()
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("notifications"))
+
+
+@employee_bp.route("/notifications/<int:notification_id>/delete", methods=["POST"])
+@login_required()
+def delete_notification(notification_id):
+    conn = db()
+    try:
+        deleted = conn.execute(
+            "DELETE FROM notifications WHERE id=? AND user_id=? RETURNING id",
+            (notification_id, session["uid"]),
+        ).fetchone()
+        if not deleted:
+            abort(404)
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect(url_for("notifications"))
+
+
+@employee_bp.route("/notifications/delete-all", methods=["POST"])
+@login_required()
+def delete_all_notifications():
+    conn = db()
+    try:
+        conn.execute("DELETE FROM notifications WHERE user_id=?", (session["uid"],))
+        conn.commit()
+    finally:
+        conn.close()
+    return redirect(url_for("notifications"))
 
 
 @employee_bp.route("/pick", methods=["POST"])
@@ -202,67 +300,75 @@ def read_notifications():
 def pick():
     if session["role"] != "employee":
         flash("Picks are for employees — managers don't schedule themselves.")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("calendar_view"))
     conn = db()
     try:
         uid = session["uid"]
-        week = monday_of(date.today()).isoformat()
+        week0 = monday_of(date.today())
+        weeks = [week0.isoformat(), (week0 + timedelta(days=7)).isoformat()]
         my_station = conn.execute("SELECT station FROM users WHERE id=?", (uid,)).fetchone()
         if not my_station:
             session.clear()
             return redirect(url_for("login"))
-        week_shifts = [
-            r["id"]
-            for r in conn.execute(
-                "SELECT id FROM shifts WHERE week_start=? AND area=? ORDER BY id FOR KEY SHARE",
-                (week, my_station["station"] if my_station else "front"),
-            )
-        ]
-        # Serialize repeated submissions by this employee after shift locks.
+        areas = ("front", "back") if my_station["station"] == "both" else (my_station["station"],)
+        week_rows = conn.execute(
+            "SELECT id, day, week_start FROM shifts WHERE week_start IN (?,?) AND area IN ("
+            + ",".join("?" for _ in areas)
+            + ") ORDER BY week_start, id FOR KEY SHARE",
+            (weeks[0], weeks[1], *areas),
+        ).fetchall()
+        if not week_rows:
+            flash("No shifts are posted for the next two weeks yet.")
+            return redirect(url_for("calendar_view"))
+
+        # Serialize repeated submissions by this employee after locking shifts.
         conn.execute("SELECT id FROM users WHERE id=? FOR NO KEY UPDATE", (uid,)).fetchone()
-        day_ranked = []
-        for day in DAYS:
-            value = request.form.get(f"rank_day_{day}")
-            if not value or not value.isdigit() or not 1 <= int(value) <= 7:
-                day_ranked = []
-                break
-            day_ranked.append((int(value), day))
-        ranked = []
-        if day_ranked:
+        shifts_by_week = defaultdict(list)
+        for shift in week_rows:
+            shifts_by_week[shift["week_start"]].append(shift)
+
+        ranked_by_week = {}
+        has_day_form = any(request.form.get(f"rank_day_{day}") for day in DAYS)
+        if has_day_form:
+            day_ranked = []
+            for day in DAYS:
+                value = request.form.get(f"rank_day_{day}")
+                if not value or not value.isdigit() or not 1 <= int(value) <= 7:
+                    flash("Rank all seven days, from 1 (top choice) to 7.")
+                    return redirect(url_for("calendar_view"))
+                day_ranked.append((int(value), day))
             if sorted(rank for rank, _ in day_ranked) != list(range(1, 8)):
                 flash("Use each day rank 1–7 exactly once.")
-                return redirect(url_for("dashboard"))
+                return redirect(url_for("calendar_view"))
             day_order = [day for _, day in sorted(day_ranked)]
-            shift_rows = conn.execute(
-                "SELECT id, day FROM shifts WHERE week_start=? AND area=? ORDER BY id",
-                (week, my_station["station"] if my_station else "front"),
-            ).fetchall()
-            per_day = {day: [] for day in DAYS}
-            for shift in shift_rows:
-                per_day[shift["day"]].append(shift["id"])
-            rank = 1
-            for day in day_order:
-                for sid in per_day[day]:
-                    ranked.append((rank, sid))
-                    rank += 1
+            for week, rows in shifts_by_week.items():
+                ids_by_day = defaultdict(list)
+                for shift in rows:
+                    ids_by_day[shift["day"]].append(shift["id"])
+                ordered_ids = [sid for day in day_order for sid in ids_by_day[day]]
+                ranked_by_week[week] = list(enumerate(ordered_ids, start=1))
         else:
-            # Keep accepting the legacy per-shift form for existing clients.
-            missing = []
-            for sid in week_shifts:
-                value = request.form.get(f"rank_{sid}")
-                if value and value.isdigit() and 1 <= int(value) <= len(week_shifts):
-                    ranked.append((int(value), int(sid)))
-                else:
-                    missing.append(sid)
-            if missing:
-                flash("Rank all seven days, from 1 (top choice) to 7.")
-                return redirect(url_for("dashboard"))
-            if sorted(rank for rank, _ in ranked) != list(range(1, len(week_shifts) + 1)):
-                flash("Use each shift rank exactly once so every shift has a backup.")
-                return redirect(url_for("dashboard"))
-        conn.execute("DELETE FROM picks WHERE user_id=?", (uid,))
+            for week, rows in shifts_by_week.items():
+                ranked = []
+                for shift in rows:
+                    value = request.form.get(f"rank_{shift['id']}")
+                    if not value or not value.isdigit():
+                        flash("Rank every shift in each scheduled week.")
+                        return redirect(url_for("calendar_view"))
+                    ranked.append((int(value), shift["id"]))
+                if sorted(rank for rank, _ in ranked) != list(range(1, len(rows) + 1)):
+                    flash("Use each shift rank exactly once in each week.")
+                    return redirect(url_for("calendar_view"))
+                ranked_by_week[week] = ranked
+
+        shift_ids = [shift["id"] for shift in week_rows]
+        placeholders = ",".join("?" for _ in shift_ids)
+        conn.execute(
+            f"DELETE FROM picks WHERE user_id=? AND shift_id IN ({placeholders})",
+            (uid, *shift_ids),
+        )
         cover_updates = []
-        for sid in week_shifts:
+        for sid in shift_ids:
             cover_values = request.form.getlist(f"cover_{sid}")
             willingness = "yes" if "yes" in cover_values else "no" if "no" in cover_values else None
             if willingness in ("yes", "no"):
@@ -276,16 +382,24 @@ def pick():
             cur.executemany(
                 "INSERT INTO picks (user_id, shift_id, rank) VALUES (?,?,?) "
                 "ON CONFLICT (user_id, shift_id) DO UPDATE SET rank=excluded.rank",
-                [(uid, sid, rank) for rank, sid in ranked],
+                [
+                    (uid, sid, rank)
+                    for week_ranks in ranked_by_week.values()
+                    for rank, sid in week_ranks
+                ],
             )
-        enqueue_rebuild(conn, week)
+        for week in ranked_by_week:
+            enqueue_rebuild(conn, week)
         conn.commit()
     finally:
         conn.close()
+    saved_weeks = len(ranked_by_week)
+    span = "both weeks" if saved_weeks == 2 else "the posted week"
     flash(
-        "Preferences saved. Shifts are assigned automatically by seniority and full-time priority."
+        f"Preferences saved for {span}. Shifts are assigned automatically by seniority "
+        "and full-time priority."
     )
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("calendar_view"))
 
 
 @employee_bp.route("/swap/<int:shift_id>", methods=["POST"])
@@ -488,6 +602,13 @@ def request_sick(shift_id):
 @employee_bp.route("/request/switch/<int:shift_id>", methods=["POST"])
 @login_required()
 def request_switch(shift_id):
+    """Ask a manager to move the employee onto another same-week shift.
+
+    Still supported, including a move onto an open slot. The dashboard no
+    longer posts here — peer swaps are that form — but the requests queue
+    still approves these, and the simulation harness still submits them.
+    This is not a deprecated alias of `/request/swap`.
+    """
     if session["role"] != "employee":
         abort(403)
     target = request.form.get("target_shift")
@@ -518,9 +639,9 @@ def request_switch(shift_id):
         flash("Choose another shift in the same week.")
         return redirect(url_for("dashboard"))
     me = conn.execute("SELECT station FROM users WHERE id=?", (uid,)).fetchone()
-    if me and target_row["area"] != me["station"]:
+    if me and me["station"] not in (target_row["area"], "both"):
         conn.close()
-        flash("Switches stay within your own house — you can't switch onto the other schedule.")
+        flash("You can only switch onto a house you're assigned to.")
         return redirect(url_for("dashboard"))
     conn.execute(
         "INSERT INTO requests (user_id, kind, shift_id, target_shift_id, created_at) "
@@ -599,8 +720,8 @@ def request_employee_swap():
         or source_id == target_id
         or source["week_start"] != target["week_start"]
         or source["area"] != target["area"]
-        or requester["station"] != source["area"]
-        or employee["station"] != source["area"]
+        or requester["station"] not in (source["area"], "both")
+        or employee["station"] not in (source["area"], "both")
         or conflicting_assignment
     ):
         conn.close()
@@ -748,7 +869,9 @@ def respond_to_swap(req_id):
         and recipient
         and requester["role"] == recipient["role"] == "employee"
         and source["week_start"] == target["week_start"]
-        and source["area"] == target["area"] == requester["station"] == recipient["station"]
+        and source["area"] == target["area"]
+        and requester["station"] in (source["area"], "both")
+        and recipient["station"] in (source["area"], "both")
     )
     if decision == "accept" and valid_pair and assignments_valid:
         requester_block = assignment_block_reason(

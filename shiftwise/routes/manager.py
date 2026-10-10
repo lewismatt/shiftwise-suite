@@ -29,13 +29,18 @@ manager_bp = Blueprint("manager", __name__)
 @login_required(role="manager")
 def manager():
     conn = db()
-    week = monday_of(date.today()).isoformat()
-    shifts = conn.execute("SELECT * FROM shifts WHERE week_start=? ORDER BY id", (week,)).fetchall()
+    week0 = monday_of(date.today())
+    week = week0.isoformat()
+    schedule_weeks = [week, (week0 + timedelta(days=7)).isoformat()]
+    shifts = conn.execute(
+        "SELECT * FROM shifts WHERE week_start IN (?,?) ORDER BY week_start, id",
+        schedule_weeks,
+    ).fetchall()
     picks = conn.execute(
-        "SELECT p.rank, u.name, s.day, s.start_time, s.end_time FROM picks p "
+        "SELECT p.rank, u.name, s.day, s.start_time, s.end_time, s.week_start FROM picks p "
         "JOIN users u ON u.id=p.user_id JOIN shifts s ON s.id=p.shift_id "
-        "WHERE s.week_start=? ORDER BY u.name, p.rank",
-        (week,),
+        "WHERE s.week_start IN (?,?) ORDER BY s.week_start, u.name, p.rank",
+        schedule_weeks,
     ).fetchall()
     assigned = defaultdict(list)
     label = {
@@ -51,12 +56,15 @@ def manager():
         "WHERE a.status NOT IN ('sick','swap_requested')"
     ):
         assigned[r["shift_id"]].append(f"{r['name']} ({label.get(r['status'], r['status'])})")
-    unassigned = conn.execute(
-        "SELECT DISTINCT u.name FROM users u WHERE u.role='employee' AND u.id NOT IN "
-        "(SELECT a.user_id FROM assignments a JOIN shifts s ON s.id=a.shift_id "
-        " WHERE s.week_start=?)",
-        (week,),
-    ).fetchall()
+    unassigned_by_week = []
+    for schedule_week in schedule_weeks:
+        rows = conn.execute(
+            "SELECT DISTINCT u.name FROM users u WHERE u.role='employee' AND u.id NOT IN "
+            "(SELECT a.user_id FROM assignments a JOIN shifts s ON s.id=a.shift_id "
+            " WHERE s.week_start=?) ORDER BY u.name",
+            (schedule_week,),
+        ).fetchall()
+        unassigned_by_week.append({"week": schedule_week, "names": [row["name"] for row in rows]})
     conn.close()
     front_shifts = [s for s in shifts if s["area"] == "front"]
     back_shifts = [s for s in shifts if s["area"] == "back"]
@@ -67,9 +75,10 @@ def manager():
         DAYS=DAYS,
         assigned=assigned,
         week=week,
+        schedule_weeks=schedule_weeks,
         front_shifts=front_shifts,
         back_shifts=back_shifts,
-        unassigned=[u["name"] for u in unassigned],
+        unassigned_by_week=unassigned_by_week,
     )
 
 
@@ -93,7 +102,20 @@ def add_shift():
         flash("Choose a day, an end time after the start, and 1–10 slots.")
         return redirect(url_for("manager"))
     conn = db()
-    week = monday_of(date.today()).isoformat()
+    week0 = monday_of(date.today())
+    allowed_weeks = {week0, week0 + timedelta(days=7)}
+    week_text = request.form.get("week_start", week0.isoformat()).strip()
+    try:
+        requested_week = date.fromisoformat(week_text)
+    except ValueError:
+        conn.close()
+        flash("Choose a valid Monday in the two-week scheduling window.")
+        return redirect(url_for("manager.manager"))
+    if requested_week not in allowed_weeks:
+        conn.close()
+        flash("Choose the current or next Monday for this shift.")
+        return redirect(url_for("manager.manager"))
+    week = requested_week.isoformat()
     start_text = start_time.strftime("%H:%M")
     end_text = end_time.strftime("%H:%M")
     note = request.form.get("note") or None
@@ -112,7 +134,7 @@ def add_shift():
             (week, day, start_text, end_text, slots, note, shift_area),
         )
         for emp in conn.execute(
-            "SELECT id FROM users WHERE role='employee' AND station=?", (shift_area,)
+            "SELECT id FROM users WHERE role='employee' AND station IN (?, 'both')", (shift_area,)
         ):
             notify(
                 conn,
@@ -167,8 +189,11 @@ def delete_shift(shift_id):
 @manager_bp.route("/manager/run", methods=["POST"])
 @login_required(role="manager")
 def run():
-    n = run_scheduler_now(monday_of(date.today()).isoformat())
-    flash(f"Scheduler ran over {n} picks — check assignments below.")
+    week0 = monday_of(date.today())
+    total_picks = sum(
+        run_scheduler_now((week0 + timedelta(days=offset)).isoformat()) for offset in (0, 7)
+    )
+    flash(f"Scheduler ran over {total_picks} picks across both weeks — check assignments below.")
     return redirect(url_for("manager"))
 
 

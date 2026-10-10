@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1 class="page-title">Manager Dashboard</h1>
-<p class="muted" style="margin-bottom:20px">Week of {{ week }} — scheduling is fully automatic; your job is review only. Front of house and back of house run as two separate schedules.</p>
+<p class="muted" style="margin-bottom:20px">Weeks of {{ schedule_weeks[0] }} and {{ schedule_weeks[1] }} — scheduling is fully automatic; your job is review only. Front of house and back of house run as two separate schedules.</p>
 
 <div class="card" style="margin-bottom:16px">
   <h2 style="margin-top:2px">Add shift</h2>
@@ -10,6 +10,11 @@
     <select name="area">
       <option value="front">Front of house</option>
       <option value="back">Back of house</option>
+    </select>
+    <select name="week_start" aria-label="Shift week">
+      {% for schedule_week in schedule_weeks %}
+      <option value="{{ schedule_week }}">Week of {{ schedule_week }}</option>
+      {% endfor %}
     </select>
     <select name="day">{% for d in DAYS %}<option>{{ d }}</option>{% endfor %}</select>
     <input name="start" placeholder="09:00" required aria-label="Start time">
@@ -24,9 +29,10 @@
 <h2>Front of house</h2>
 <div class="table-wrap">
 <table class="manager-shifts-table">
-  <tr><th>Day</th><th>Time</th><th>Slots</th><th>Assigned</th><th>Action</th></tr>
+  <tr><th>Week of</th><th>Day</th><th>Time</th><th>Slots</th><th>Assigned</th><th>Action</th></tr>
   {% for s in front_shifts %}
   <tr>
+    <td data-label="Week">{{ s.week_start }}</td>
     <td data-label="Day"><strong>{{ s.day }}</strong>{% if s.note %} <span class="muted">· {{ s.note }}</span>{% endif %}</td>
     <td data-label="Time"><span class="tag dim">{{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</span></td>
     <td data-label="Slots">
@@ -47,7 +53,7 @@
     </td>
   </tr>
   {% else %}
-  <tr><td colspan="5" class="muted">No front-of-house shifts posted for this week.</td></tr>
+  <tr><td colspan="6" class="muted">No front-of-house shifts posted for these weeks.</td></tr>
   {% endfor %}
 </table>
 </div>
@@ -55,9 +61,10 @@
 <h2>Back of house</h2>
 <div class="table-wrap">
 <table class="manager-shifts-table">
-  <tr><th>Day</th><th>Time</th><th>Slots</th><th>Assigned</th><th>Action</th></tr>
+  <tr><th>Week of</th><th>Day</th><th>Time</th><th>Slots</th><th>Assigned</th><th>Action</th></tr>
   {% for s in back_shifts %}
   <tr>
+    <td data-label="Week">{{ s.week_start }}</td>
     <td data-label="Day"><strong>{{ s.day }}</strong>{% if s.note %} <span class="muted">· {{ s.note }}</span>{% endif %}</td>
     <td data-label="Time"><span class="tag dim">{{ s.start_time|clock_time(time_format) }}–{{ s.end_time|clock_time(time_format) }}</span></td>
     <td data-label="Slots">
@@ -78,25 +85,28 @@
     </td>
   </tr>
   {% else %}
-  <tr><td colspan="5" class="muted">No back-of-house shifts posted for this week.</td></tr>
+  <tr><td colspan="6" class="muted">No back-of-house shifts posted for these weeks.</td></tr>
   {% endfor %}
 </table>
 </div>
 
-<h2>Employee picks (this week)</h2>
+<h2>Employee picks (next two weeks)</h2>
 <div class="table-wrap">
 <table>
-  <tr><th>Employee</th><th>Rank</th><th>Shift</th></tr>
+  <tr><th>Employee</th><th>Week of</th><th>Rank</th><th>Shift</th></tr>
   {% for p in picks %}
-  <tr><td data-label="Employee"><strong>{{ p.name }}</strong></td><td data-label="Rank"><span class="tag dim">#{{ p.rank }}</span></td><td data-label="Shift">{{ p.day }} {{ p.start_time|clock_time(time_format) }}–{{ p.end_time|clock_time(time_format) }}</td></tr>
+  <tr><td data-label="Employee"><strong>{{ p.name }}</strong></td><td data-label="Week">{{ p.week_start }}</td><td data-label="Rank"><span class="tag dim">#{{ p.rank }}</span></td><td data-label="Shift">{{ p.day }} {{ p.start_time|clock_time(time_format) }}–{{ p.end_time|clock_time(time_format) }}</td></tr>
   {% else %}
-  <tr><td colspan="3" class="muted">No picks yet.</td></tr>
+  <tr><td colspan="4" class="muted">No picks yet.</td></tr>
   {% endfor %}
 </table>
 </div>
 
-<h2>Employees with no assignment this week</h2>
-<div class="card">
-  <p style="margin:0">{% for u in unassigned %}{{ u }}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">none — everyone's assigned</span>{% endfor %}</p>
-</div>
+<h2>Employees with no assignment</h2>
+{% for week in unassigned_by_week %}
+<section class="card" style="margin-bottom:12px" aria-label="Unassigned week of {{ week.week }}">
+  <p class="muted" style="margin:0 0 6px">Week of {{ week.week }}</p>
+  <p style="margin:0">{% for u in week.names %}{{ u }}{% if not loop.last %}, {% endif %}{% else %}<span class="muted">none — everyone's assigned</span>{% endfor %}</p>
+</section>
+{% endfor %}
 {% endblock %}

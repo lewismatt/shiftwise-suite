@@ -26,7 +26,8 @@ conflicts_bp = Blueprint("conflicts", __name__)
 @login_required(role="manager")
 def conflicts():
     """Shifts where picks (at the same rank) exceed open slots, with
-    claimants sorted by the priority lineup (FT first, then seniority)."""
+    claimants sorted by the priority lineup (dedicated house, then
+    full-time, then seniority)."""
     week = request.args.get("week", "") or monday_of(date.today()).isoformat()
     try:
         week = monday_of(date.fromisoformat(week)).isoformat()
@@ -38,7 +39,8 @@ def conflicts():
     for row in conn.execute(
         "SELECT p.shift_id, p.user_id, p.rank, u.name, u.employment_type, u.hired_on, "
         "u.weekly_hours, u.station FROM picks p JOIN users u ON u.id=p.user_id "
-        "JOIN shifts s ON s.id=p.shift_id WHERE s.week_start=? AND u.station=s.area "
+        "JOIN shifts s ON s.id=p.shift_id WHERE s.week_start=? "
+        "AND (u.station=s.area OR u.station='both') "
         "ORDER BY p.rank, p.id",
         (week,),
     ):
@@ -76,7 +78,7 @@ def conflicts():
                 rank_conflicts.append(
                     {
                         "rank": rank,
-                        "claimants": sorted(group, key=lambda c: priority_key(c)),
+                        "claimants": sorted(group, key=lambda c: priority_key(c, s["area"])),
                         "slots_needed": len(group),
                         "open_slots": max(open_slots, 0),
                     }
@@ -168,11 +170,11 @@ def manager_assign(shift_id, user_id):
         conn.close()
         flash("Invalid shift or employee.")
         return redirect(url_for("conflicts"))
-    if user["station"] != shift["area"]:
+    if user["station"] not in (shift["area"], "both"):
         conn.close()
         flash(
             f"{user['name']} works "
-            f"{'front' if user['station'] == 'front' else 'back'} of house — "
+            f"{'both houses' if user['station'] == 'both' else ('front' if user['station'] == 'front' else 'back') + ' of house'} — "
             "they can only be placed on shifts in their own house."
         )
         return redirect(url_for("conflicts"))

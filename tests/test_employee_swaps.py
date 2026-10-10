@@ -1,13 +1,13 @@
-from datetime import date
+from datetime import date, timedelta
 
 from test_support import insert_id
 
 import app as appmod
 
 
-def _setup_swap_pair():
+def _setup_swap_pair(week_offset=0):
     appmod.init_db(seed_demo=True)
-    week = appmod.monday_of(date.today()).isoformat()
+    week = (appmod.monday_of(date.today()) + timedelta(days=week_offset)).isoformat()
     conn = appmod.db()
     users = {
         row["username"]: row["id"]
@@ -94,6 +94,55 @@ def test_employee_can_request_and_accept_an_in_house_shift_swap():
     conn.close()
     assert request_row["status"] == "approved_ok"
     assert "Accepted" in request_row["reason"]
+
+
+def test_employee_can_request_and_accept_a_next_week_coworker_swap():
+    users, (alex_shift, sam_shift) = _setup_swap_pair(week_offset=7)
+    next_week = (appmod.monday_of(date.today()) + timedelta(days=7)).isoformat()
+    alex = appmod.app.test_client()
+    _login(alex, "alex")
+
+    dashboard = alex.get("/")
+    assert next_week.encode() in dashboard.data
+    assert b"target_assignment" in dashboard.data
+
+    response = alex.post(
+        "/request/swap",
+        data={"shift_id": alex_shift, "target_assignment": f"{users['sam']}:{sam_shift}"},
+        follow_redirects=True,
+    )
+    assert b"Swap request sent to Sam Chen" in response.data
+
+    conn = appmod.db()
+    request_row = conn.execute(
+        "SELECT id FROM requests WHERE kind='swap' AND target_user_id=? ORDER BY id DESC LIMIT 1",
+        (users["sam"],),
+    ).fetchone()
+    assert request_row is not None
+    conn.close()
+    sam = appmod.app.test_client()
+    _login(sam, "sam")
+    response = sam.post(
+        f"/request/{request_row['id']}/respond",
+        data={"decision": "accept"},
+        follow_redirects=True,
+    )
+    assert b"Swap accepted" in response.data
+
+    conn = appmod.db()
+    assert (
+        conn.execute("SELECT user_id FROM assignments WHERE shift_id=?", (alex_shift,)).fetchone()[
+            "user_id"
+        ]
+        == users["sam"]
+    )
+    assert (
+        conn.execute("SELECT user_id FROM assignments WHERE shift_id=?", (sam_shift,)).fetchone()[
+            "user_id"
+        ]
+        == users["alex"]
+    )
+    conn.close()
 
 
 def test_swap_request_is_confined_to_target_employee_and_records_rejection_reason():
@@ -305,7 +354,9 @@ def test_manager_placed_shifts_cannot_be_involved_in_employee_swaps():
 
     # (a) the manager-set shift is never offered as a swap source
     dashboard = alex.get("/")
-    source_select = dashboard.data.split(b'id="swap-source"')[1].split(b"</select>")[0]
+    source_select = dashboard.data.split(f'id="swap-source-{week}"'.encode())[1].split(
+        b"</select>"
+    )[0]
     assert f'value="{alex_shift}"'.encode() not in source_select
     assert f'value="{extra_shift}"'.encode() in source_select
 

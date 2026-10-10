@@ -226,20 +226,16 @@ def _run_assignment_rounds(state):
     capacity = state.capacity
     shift_hours_map = state.shift_hours_map
 
-    # Priority lineup: front-of-house before back-of-house, then
-    # full-time before part-time, then earliest hire date first.
-    # Employees missing a hire date rank last within their group
-    # (treated as newest). Each employee is only scheduled into
-    # shifts of their own area: a FOH employee's picks on BOH
-    # shifts (and vice versa) are ignored — the two houses run as
-    # two separate schedules.
-    def priority(uid):
-        return priority_key(users[uid])
-
-    my_area = {uid: users[uid]["station"] for uid in users}
+    # Priority lineup for this shift: dedicated house staff before
+    # dual-house floaters, then full-time before part-time, then
+    # earliest hire date first. Employees missing a hire date rank
+    # last within their group (treated as newest). A pick is eligible
+    # when the employee's station is the shift's house or both.
+    def priority(uid, sid):
+        return priority_key(users[uid], area_of[sid])
 
     def eligible(uid, sid):
-        return sid in area_of and my_area[uid] == area_of[sid]
+        return sid in area_of and users[uid]["station"] in (area_of[sid], "both")
 
     max_rank = max((max(prefs) for prefs in user_prefs.values()), default=0)
     new_assignments = []
@@ -253,7 +249,7 @@ def _run_assignment_rounds(state):
                     continue
                 if not eligible(uid, sid):
                     continue  # FOH pick on a BOH shift (or vice versa)
-                claimants.append((priority(uid), uid, sid))
+                claimants.append((priority(uid, sid), uid, sid))
         claimants.sort()
         for _, uid, sid in claimants:
             if sid in [a[0] for a in user_assignments[uid]]:
@@ -527,9 +523,9 @@ def _schedule_week(conn, week_start, actor="system"):
 def run_scheduler(week_start, actor="system"):
     """Assign picks to shifts across the week.
 
-    Round-based, with a priority lineup: employees are ordered by
-    employment type (full-time before part-time), then by seniority
-    (earliest hire date first). In round N every employee claims their
+    Round-based, with a priority lineup: dedicated house staff outrank
+    dual-house floaters for that shift, then full-time before part-time,
+    then earliest hire date. In round N every employee claims their
     rank-N pick; contested slots go to the highest-priority employee in
     line. Employees are never scheduled past their weekly hours cap
     (full-time default 40h, part-time as set on the roster), including

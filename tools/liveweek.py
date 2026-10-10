@@ -934,7 +934,11 @@ def b_partial_picks(ctx):
     for s, rk in zip(shifts[:-1], ranks):
         data[f"rank_{s['id']}"] = str(rk)
     r = ctx.sess.post("/pick", data)
-    ok = r.flash and ("Rank all seven days" in r.flash or "Use each rank" in r.flash)
+    ok = r.flash and (
+        "Rank all seven days" in r.flash
+        or "Use each rank" in r.flash
+        or "Rank every shift in each scheduled week." in r.flash
+    )
     if not ok:
         ctx.rec.issue(
             "MEDIUM",
@@ -1335,6 +1339,7 @@ def m_add_shift(ctx):
         "/manager/shift/add",
         {
             "area": area,
+            "week_start": ctx.week,
             "day": day,
             "start": start,
             "end": end,
@@ -2411,7 +2416,7 @@ def seed_world(appmod):
     import mock_seed
 
     appmod.init_db(seed_demo=True)
-    mock_seed.seed(appmod, force=True)
+    mock_seed.seed(appmod, force=True, week_count=1)
     appmod.init_db(seed_demo=True)  # migration/hash pass, like tools/gauntlet.py
     con = appmod.db()
     con.execute(

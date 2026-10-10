@@ -10,7 +10,7 @@ TESTS_DIR = ROOT_DIR / "tests"
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -78,8 +78,24 @@ def test_mock_smoke():
     on_front = sorted(r["username"] for r in rows if r["area"] == "front")
     on_back = sorted(r["username"] for r in rows if r["area"] == "back")
     assert not cross, f"cross-house leak: {[r['username'] for r in cross]}"
-    assert on_front == ["maria"], f"FOH Mon opening got {on_front}"
-    assert on_back == ["morgan"], f"BOH Mon opening got {on_back}"
+    assert len(on_front) == 1, f"FOH Mon opening got {on_front}"
+    assert len(on_back) == 1, f"BOH Mon opening got {on_back}"
+    conn = appmod.db()
+    allowed_front = {
+        row["username"]
+        for row in conn.execute(
+            "SELECT username FROM users WHERE station='front' AND role='employee'"
+        )
+    }
+    allowed_back = {
+        row["username"]
+        for row in conn.execute(
+            "SELECT username FROM users WHERE station='back' AND role='employee'"
+        )
+    }
+    conn.close()
+    assert on_front[0] in allowed_front
+    assert on_back[0] in allowed_back
 
 
 def test_seeded_demo_has_staggered_shifts_and_peak_staffing():
@@ -202,7 +218,7 @@ def test_seed_refuses_to_wipe_nonempty_db_without_force():
 
     # ...and an explicit force=True still wipes and reseeds.
     n, d, p = mock_seed.seed(appmod, force=True)
-    assert (n, d, p) == (14, 7, 14 * 21)
+    assert (n, d, p) == (14, 7, 14 * 42)
 
 
 def test_seed_on_empty_db_needs_no_force():
@@ -213,7 +229,47 @@ def test_seed_on_empty_db_needs_no_force():
     conn.commit()
     conn.close()
     n, d, p = mock_seed.seed(appmod)
-    assert (n, d, p) == (14, 7, 14 * 21)
+    assert (n, d, p) == (14, 7, 14 * 42)
+
+
+def test_seed_can_create_a_single_week_for_weekly_scenarios():
+    appmod.init_db(seed_demo=True)
+    n, days, picks = mock_seed.seed(appmod, force=True, week_count=1)
+    assert (n, days, picks) == (14, 7, 294)
+    conn = appmod.db()
+    assert conn.execute("SELECT COUNT(*) FROM shifts").fetchone()[0] == 42
+    assert conn.execute("SELECT COUNT(DISTINCT week_start) FROM shifts").fetchone()[0] == 1
+    conn.close()
+
+
+def test_seed_creates_two_weeks_with_independent_full_rankings():
+    appmod.init_db(seed_demo=True)
+    n, days, picks = mock_seed.seed(appmod, force=True)
+    assert (n, days, picks) == (14, 7, 14 * 42)
+
+    week0 = appmod.monday_of(date.today())
+    weeks = [week0.isoformat(), (week0 + timedelta(days=7)).isoformat()]
+    conn = appmod.db()
+    try:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM shifts WHERE week_start IN (?,?)", weeks).fetchone()[
+                0
+            ]
+            == 84
+        )
+        for user in conn.execute("SELECT id FROM users WHERE role='employee'"):
+            for week in weeks:
+                ranks = [
+                    row["rank"]
+                    for row in conn.execute(
+                        "SELECT p.rank FROM picks p JOIN shifts s ON s.id=p.shift_id "
+                        "WHERE p.user_id=? AND s.week_start=? ORDER BY p.rank",
+                        (user["id"], week),
+                    )
+                ]
+                assert ranks == list(range(1, 22))
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

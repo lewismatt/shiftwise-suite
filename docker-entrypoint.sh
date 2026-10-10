@@ -13,6 +13,7 @@ fi
 # SHIFTWISE_DEMO_SEED=1 for a demo; production boots with an empty database
 # and requires SHIFTWISE_BOOTSTRAP_MANAGER_PASSWORD on first start.
 python3 - <<'PY'
+from datetime import timedelta
 import os
 
 try:
@@ -22,7 +23,9 @@ try:
         import mock_seed
 
         app.init_db(mock_roster=True)
-        app.run_scheduler(app.monday_of(app.date.today()).isoformat())
+        week0 = app.monday_of(app.date.today())
+        for offset in (0, 7):
+            app.run_scheduler((week0 + timedelta(days=offset)).isoformat())
     else:
         app.init_db()
 except RuntimeError as exc:

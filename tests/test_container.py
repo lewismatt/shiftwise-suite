@@ -39,7 +39,7 @@ class TestContainerDeployment(unittest.TestCase):
 
         self.assertEqual(employee_count, 14)
         self.assertIsNotNone(manager)
-        self.assertEqual(shift_count, 42)
+        self.assertEqual(shift_count, 84)
 
     def test_cookie_security_defaults(self):
         self.assertTrue(appmod.app.config.get("SESSION_COOKIE_HTTPONLY"))

@@ -28,7 +28,7 @@ from shiftwise.security import use_csrf_aware_test_client
 
 # The app is imported only after its isolated PostgreSQL target is configured.
 appmod.init_db(seed_demo=True)
-seed(appmod, force=True)
+seed(appmod, force=True, week_count=1)
 appmod.init_db(seed_demo=True)
 
 use_csrf_aware_test_client(appmod.app)

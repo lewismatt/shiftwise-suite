@@ -152,7 +152,7 @@ def test_postgres_mock_seed_and_counts():
     n_emp, n_days, n_picks = mock_seed.seed(appmod, force=True)
     assert n_emp == 14
     assert n_days == 7
-    assert n_picks == 294
+    assert n_picks == 588
 
     conn = db()
     emp_count = conn.execute("SELECT COUNT(*) c FROM users WHERE role='employee'").fetchone()["c"]
@@ -160,8 +160,8 @@ def test_postgres_mock_seed_and_counts():
     pick_count = conn.execute("SELECT COUNT(*) c FROM picks").fetchone()["c"]
     conn.close()
     assert emp_count == 14
-    assert shift_count == 42  # 7 days * 3 windows * 2 houses
-    assert pick_count == 294
+    assert shift_count == 84  # 2 weeks * 7 days * 3 windows * 2 houses
+    assert pick_count == 588
 
 
 def test_postgres_on_conflict_picks_upsert():

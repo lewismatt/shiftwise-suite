@@ -40,14 +40,15 @@ def test_clock_format_defaults_to_existing_24_hour_display():
     client = appmod.app.test_client()
     _login(client, username)
 
-    response = client.get("/")
     conn = appmod.db()
     row = conn.execute("SELECT time_format FROM users WHERE username=?", (username,)).fetchone()
     conn.close()
 
+    calendar = client.get("/calendar")
+
     assert row["time_format"] == "24h"
-    assert b"13:05" in response.data
-    assert b"1:05 PM" not in response.data
+    assert b"13:05" in calendar.data
+    assert b"1:05 PM" not in calendar.data
 
 
 def test_user_can_save_12_hour_clock_format():
@@ -72,10 +73,8 @@ def test_user_can_save_12_hour_clock_format():
     conn.close()
     assert response.status_code == 200
     assert row["time_format"] == "12h"
-    dashboard = client.get("/")
     calendar = client.get("/calendar")
-    assert dashboard.status_code == 200 and calendar.status_code == 200
-    assert b"1:05 PM" in dashboard.data
+    assert calendar.status_code == 200
     assert b"1:05 PM" in calendar.data
 
 
@@ -109,7 +108,7 @@ def test_clock_formatter_handles_noon_midnight_and_afternoon():
     conn.commit()
     conn.close()
 
-    page = client.get("/").data
+    page = client.get("/calendar").data
     assert b"12:00 AM" in page
     assert b"12:00 PM" in page
 

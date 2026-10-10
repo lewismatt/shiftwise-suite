@@ -42,31 +42,33 @@ The core operational workflow is:
 
 ## 2. Front-of-House & Back-of-House Separation
 
-A foundational architectural invariant is the strict separation between Front-of-House (`front`) and Back-of-House (`back`):
+Front-of-House (`front`) and Back-of-House (`back`) are scheduled as separate houses. An employee belongs to one house or to both.
 
-- **User Model:** Every employee belongs to a `station` (`front` or `back`).
+- **User Model:** Every employee belongs to a `station` (`front`, `back`, or `both`). `both` is a dual-house floater who can work either house.
 - **Shift Model:** Every shift belongs to an `area` (`front` or `back`).
 - **Isolation Rules:**
-  - An employee can only submit picks for shifts where `shift.area == user.station`.
-  - The auto-scheduler never assigns an employee across house boundaries.
-  - Coverage planning (`coverage_plan`) only searches for candidates within the shift's house area.
-  - Switch and swap requests cannot target cross-house shifts.
-  - Manager overrides validate that the chosen employee belongs to the shift's house area.
+  - An employee can submit picks only for shifts where `shift.area == user.station`, or for either house when `user.station == 'both'`.
+  - The auto-scheduler never assigns a single-house employee across house boundaries. Dual-house employees may be assigned in either house.
+  - Coverage planning (`coverage_plan`) only searches candidates whose station is the shift's house or `both`.
+  - Switch and swap requests cannot target a house the employee is not assigned to.
+  - Manager overrides validate that the chosen employee belongs to the shift's house or is dual-house.
 
 ---
 
 ## 3. Auto-Scheduler Engine Mechanics
 
-The auto-scheduler (`run_scheduler(week_start)`) assigns shifts across a seven-day week (Mon–Sun) starting on the specified date.
+The auto-scheduler (`run_scheduler(week_start)`) assigns shifts across a seven-day week (Mon–Sun) starting on the specified date. The live horizon is the current week and the next. Preference saves, shift edits, and the manager's manual run rebuild both weeks; `run_scheduler` itself still rebuilds one `week_start`.
 
 ### Priority Lineup
 
 When multiple employees compete for the same shift slot, priority is determined by `priority_key`:
-1. **Station Order:** `front` before `back` (shifts are partitioned by house).
+1. **House fit:** Dedicated staff for that shift's house outrank dual-house floaters, so floaters stay available for the other house. Ineligible stations sort last. A lineup with no house does not rank by station — houses are peers.
 2. **Employment Type:** Full-time (`full_time`) takes precedence over part-time (`part_time`).
 3. **Seniority:** Earlier hire date (`hired_on`) wins among employees of the same employment type.
 
-$$\text{priority\_key} = (0 \text{ if front else } 1, \ 0 \text{ if full\_time else } 1, \ -\text{seniority\_days})$$
+$$\text{priority\_key} = (\text{station\_rank},\ 0 \text{ if full\_time else } 1,\ -\text{seniority\_days})$$
+
+`station_rank` is 0 for a dedicated match, 1 for `both`, 2 for the other house, and 0 when no area is supplied.
 
 ### Invariants & Constraint Checks
 
@@ -98,7 +100,7 @@ When `run_scheduler` executes:
 When an assigned shift is vacated, `coverage_plan(conn, week, out_shift_id, out_uid)` finds the optimal replacement:
 
 1. **Unfilled Pickers First:** Evaluates other employees who ranked this shift but did not receive it, sorted by the priority lineup.
-2. **Least-Loaded Backup:** If no unfilled pickers are eligible, falls back to any eligible employee in the same station, prioritizing whoever has the fewest assigned hours.
+2. **Least-Loaded Backup:** If no unfilled pickers are eligible, falls back to any eligible employee for that house (dedicated or dual-house), prioritizing whoever has the fewest assigned hours.
 3. **Notification:** The new coverer receives an in-app assignment notification; if no legal coverer exists, the manager is alerted.
 
 Automatic coverage, including gaps held open by pending vacations, stays within
@@ -120,6 +122,8 @@ Employees submit 5 types of requests through the web interface:
 | `swap` | Specific shift | Calls `coverage_plan()`; releases requester if covered | Informational | `approved_ok` (covered) or `pending` |
 | `switch` | Shift A $\rightarrow$ Shift B | Requires manager approval; validates target capacity | Approve / Deny | `approved` / `denied` |
 
+`switch` remains supported: it asks a manager to move the employee onto another same-week shift, including an open slot. The employee dashboard no longer renders that form — peer exchange is `/request/swap` — but the requests queue still approves `switch`, and the simulation harness still submits it.
+
 ---
 
 ## 6. Planned Extensions
@@ -129,4 +133,4 @@ The modular architecture is the foundation for these planned capabilities (no im
 1. **Employee-to-Employee Shift Trade Board:** Employees post open shifts to a peer board; qualified same-house colleagues accept directly, with manager one-click approval.
 2. **Pluggable Notification Adapters:** Abstract `notify()` into backends (in-app PostgreSQL, email via SMTP, SMS via Twilio).
 3. **iCalendar / Webcal Schedule Feeds:** Signed subscriber URLs (`/schedule/<token>.ics`) so staff can sync published shifts to Google/Apple/Outlook calendars.
-4. **Multi-Week Scheduling & Templates:** Manager-saved repeating shift templates with schedules published 2–4 weeks ahead.
+4. **Longer Scheduling Templates:** The live horizon is two weeks (current and next). Manager-saved repeating shift templates and schedules published further ahead are not implemented yet.

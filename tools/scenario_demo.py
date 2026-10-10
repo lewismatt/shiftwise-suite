@@ -55,7 +55,7 @@ for t in (
     conn.execute(f"DELETE FROM {t}")
 conn.commit()
 conn.close()
-mock_seed.seed(appmod, force=True)
+mock_seed.seed(appmod, force=True, week_count=1)
 
 use_csrf_aware_test_client(appmod.app)
 # CLI phases drive completed rebuilds explicitly instead of racing the worker.
