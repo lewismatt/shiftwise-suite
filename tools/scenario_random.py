@@ -3,13 +3,12 @@
 Every run is different — seeded from system entropy, seed printed so a run
 can be replayed:  .venv/bin/python tools/scenario_random.py <seed>
 
-Phase 1: coin-flip the roster — each of the 10 employees randomly lands in
-         front-of-house or back-of-house (kept balanced 5/5) with a random
-         weekly-hours jitter, applied through the REAL /manager/roster route.
-Phase 2: everyone submits a RANDOM full Mon-Sun ranking through the real
-         /pick route (auto-scheduler runs). One random FOH employee also gets
-         a planted cross-house pick on a BOH shift — the scheduler must
-         ignore it (house separation invariant).
+Phase 1: randomly assign the roster across FOH, BOH, and two dual-house
+         employees, with weekly-hours jitter, through the REAL /manager/roster.
+Phase 2: everyone submits a RANDOM full Mon-Sun shift ranking through /pick.
+         The two both-house employees prioritize distinct shifts in both areas;
+         the scheduler must assign each of them in FOH and BOH. A planted
+         cross-house pick for a single-house employee must still be ignored.
 Phases 3+: chaos — all ten event kinds fire once each in random order:
          sick call, swap, day off, vacation, switch request, manager
          unassign, mid-week station flip, add shift, delete shift,
@@ -57,6 +56,7 @@ print(
 use_csrf_aware_test_client(appmod.app)
 client = appmod.app.test_client()
 WEEK = appmod.monday_of(date.today()).isoformat()
+NEXT_WEEK = (appmod.monday_of(date.today()) + timedelta(days=7)).isoformat()
 DAYS = appmod.DAYS
 OK_STATUSES = ("notified", "proposed", "confirmed", "switch_fixed", "manager_fixed", "swap_invited")
 
@@ -155,8 +155,9 @@ def snapshot(title):
         hrs = sum(appmod.shift_hours(r["start_time"], r["end_time"]) for r in real)
         wd = ", ".join(f"{r['day']}/{r['area'][:1]}({r['status'][:4]})" for r in rows) or "none"
         over = "  <<OVER CAP>>" if hrs > (u["weekly_hours"] or 40) else ""
+        station_label = "Both" if u["station"] == "both" else f"{u['station'][:1].upper()}H"
         print(
-            f"    {u['name'].split()[0]:<7} {u['station'][:1].upper()}FH "
+            f"    {u['name'].split()[0]:<7} {station_label:<4} "
             f"cap {u['weekly_hours']}h -> {hrs:>4.0f}h | {wd}{over}"
         )
 
@@ -178,12 +179,14 @@ def coverer_of(shift_row, not_uid):
 
 def run_random():
     # ================================================= PHASE 1
-    phase(1, "coin-flip the roster: who is front of house, who is back?")
+    phase(1, "assign a randomized FOH/BOH roster with two both-house employees")
     emps = employees()
-    houses = ["front"] * 5 + ["back"] * 5
+    both_users = ("maria", "morgan")
+    houses = ["front"] * 6 + ["back"] * 6
     rng.shuffle(houses)
     changes = {}
-    for u, h in zip(emps, houses):
+    for u in emps:
+        h = "both" if u in both_users else houses.pop()
         old = house_of(u)
         cap = q("SELECT weekly_hours FROM users WHERE username=?", (u,))[0]["weekly_hours"]
         new_cap = max(16, min(40, cap + rng.choice([-4, -2, 0, 0, 2, 4])))
@@ -198,17 +201,36 @@ def run_random():
     phase(2, "everyone submits a RANDOM full Mon-Sun ranking")
     for u in emps:
         h = house_of(u)
-        login(u)
-        days = list(DAYS)
-        rng.shuffle(days)
+        areas = ("front", "back") if h == "both" else (h,)
+        shifts = q(
+            "SELECT id, area, week_start FROM shifts WHERE week_start IN (?,?) AND area IN ("
+            + ",".join("?" for _ in areas)
+            + ") ORDER BY week_start, id",
+            (WEEK, NEXT_WEEK, *areas),
+        )
+        by_week = {week: [row for row in shifts if row["week_start"] == week]
+                   for week in (WEEK, NEXT_WEEK)}
         form = {}
-        ranked = []
-        for i, d in enumerate(days, 1):
-            form[f"rank_day_{d}"] = str(i)
-            ranked.append(f"{i}.{d}")
+        for week, week_shifts in by_week.items():
+            rng.shuffle(week_shifts)
+            ordered_ids = [row["id"] for row in week_shifts]
+            if u in both_users:
+                by_area = {
+                    area: [row["id"] for row in week_shifts if row["area"] == area]
+                    for area in ("front", "back")
+                }
+                # Give each both-house employee an early, distinct first choice in
+                # both schedules; the random tail still exercises full rankings.
+                index = both_users.index(u)
+                priority_ids = [by_area["front"][index], by_area["back"][index]]
+                ordered_ids = priority_ids + [sid for sid in ordered_ids if sid not in priority_ids]
+            form.update(
+                {f"rank_{sid}": str(rank) for rank, sid in enumerate(ordered_ids, 1)}
+            )
+        login(u)
         r = client.post("/pick", data=form, follow_redirects=True)
         assert b"Preferences saved" in r.data, f"pick rejected for {u}"
-        print(f"  {u:<7} ({h[:1]}FH): {' > '.join(ranked)}")
+        print(f"  {u:<7} ({h}): ranked {len(form)} shifts across {', '.join(areas)}")
 
     # planted cross-house pick: a FOH employee holding a rank-1 pick on a BOH
     # shift (as if picked before a house flip) — must never be assigned
@@ -222,6 +244,15 @@ def run_random():
     conn.commit()
     conn.close()
     appmod.run_scheduler(WEEK)
+    for u in both_users:
+        assigned_areas = {
+            row["area"]
+            for row in holding(u, OK_STATUSES)
+        }
+        assert assigned_areas == {"front", "back"}, (
+            f"both-house employee {u} must get FOH and BOH shifts; got {assigned_areas}"
+        )
+        print(f"  BOTH-HOUSE CHECK: {u} assigned in FOH and BOH")
     print(
         f"  noise: planted a cross-house pick for {noise_u} on a BACK shift "
         f"(scheduler must ignore it)"
@@ -307,12 +338,15 @@ def run_random():
             u = rng.choice(cands)
             mine = holding(u, OK_STATUSES)
             h = house_of(u)
+            areas = ("front", "back") if h == "both" else (h,)
             held = {m["id"] for m in mine}
             targets = [
                 r
                 for r in q(
-                    "SELECT id, day, start_time FROM shifts WHERE week_start=? AND area=?",
-                    (WEEK, h),
+                    "SELECT id, day, start_time, area FROM shifts WHERE week_start=? AND area IN ("
+                    + ",".join("?" for _ in areas)
+                    + ")",
+                    (WEEK, *areas),
                 )
                 if r["id"] not in held
             ]
@@ -459,7 +493,7 @@ def run_random():
         "SELECT u.username, u.station, s.day, s.area, a.status "
         "FROM assignments a JOIN shifts s ON s.id=a.shift_id "
         "JOIN users u ON u.id=a.user_id "
-        "WHERE s.week_start=? AND s.area!=u.station",
+        "WHERE s.week_start=? AND u.station NOT IN (s.area, 'both')",
         (WEEK,),
     )
     if leaks:
